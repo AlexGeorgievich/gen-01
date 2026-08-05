@@ -63,6 +63,15 @@ def test_translation_reports_chunk_progress():
     assert updates == [(1, 3), (2, 3), (3, 3)]
 
 
+def test_adjacent_short_lines_are_translated_in_one_request():
+    translator = RecordingTranslator()
+
+    result = translate_preserving_layout("one\ntwo\nthree", translator)
+
+    assert translator.calls == ["one\ntwo\nthree"]
+    assert result.text == "<one\ntwo\nthree>"
+
+
 def test_translation_honours_cancellation_between_chunks():
     translator = RecordingTranslator()
 
@@ -71,6 +80,7 @@ def test_translation_honours_cancellation_between_chunks():
             "one\ntwo",
             translator,
             cancelled=lambda: bool(translator.calls),
+            limit=3,
         )
 
     assert translator.calls == ["one"]
