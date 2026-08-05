@@ -9,6 +9,7 @@ from gpt01.languages import (
 
 def test_required_language_profiles_exist():
     assert {profile.key for profile in LANGUAGES} == {
+        "English",
         "French",
         "Spanish",
         "Japan",
@@ -17,11 +18,18 @@ def test_required_language_profiles_exist():
 
 
 def test_language_profiles_have_distinct_translation_targets():
-    assert {profile.translation_code for profile in LANGUAGES} == {"fr", "es", "ja", "zh-CN"}
+    assert {profile.translation_code for profile in LANGUAGES} == {
+        "en",
+        "fr",
+        "es",
+        "ja",
+        "zh-CN",
+    }
 
 
 def test_language_profiles_have_expected_file_suffixes():
     assert {profile.key: profile.file_suffix for profile in LANGUAGES} == {
+        "English": "en",
         "French": "fr",
         "Spanish": "es",
         "Japan": "jp",

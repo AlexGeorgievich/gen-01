@@ -22,6 +22,21 @@ class LanguageProfile:
 
 LANGUAGES: tuple[LanguageProfile, ...] = (
     LanguageProfile(
+        key="English",
+        label="English",
+        translation_code="en",
+        file_suffix="en",
+        voice_prefix="en-",
+        transcription_mode="latin",
+        default_voice="en-US-AriaNeural",
+        fallback_voices=(
+            {"ShortName": "en-US-AriaNeural", "Locale": "en-US", "Gender": "Female"},
+            {"ShortName": "en-US-GuyNeural", "Locale": "en-US", "Gender": "Male"},
+            {"ShortName": "en-GB-SoniaNeural", "Locale": "en-GB", "Gender": "Female"},
+            {"ShortName": "en-GB-RyanNeural", "Locale": "en-GB", "Gender": "Male"},
+        ),
+    ),
+    LanguageProfile(
         key="French",
         label="French",
         translation_code="fr",
