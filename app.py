@@ -203,6 +203,16 @@ class MainWindow(QMainWindow):
     def _voice_cache_path(self) -> Path:
         return self._language_directory() / "voices_cache.json"
 
+    def _language_export_path(self, selected: str, extension: str) -> Path:
+        """Place a user-named export in the active language directory."""
+        extension = extension if extension.startswith(".") else f".{extension}"
+        selected_path = Path(selected)
+        stem = selected_path.stem if selected_path.suffix else selected_path.name
+        suffix = f"_{self.current_language.file_suffix}"
+        if not stem.lower().endswith(suffix.lower()):
+            stem += suffix
+        return self._language_directory() / f"{stem}{extension}"
+
     def _ensure_language_directory(self) -> None:
         try:
             self._language_directory().mkdir(parents=True, exist_ok=True)
@@ -880,21 +890,22 @@ class MainWindow(QMainWindow):
         if not self.audio_path or not self.audio_path.exists():
             QMessageBox.information(self, APP_TITLE, "Сначала озвучьте текст.")
             return
-        suggested = "озвучка.mp3"
+        suggested_stem = "озвучка"
         if self.current_source_path:
-            suffix = self.current_language.translation_code.lower().replace("-", "_")
-            suggested = f"{self.current_source_path.stem}_{suffix}.mp3"
+            suggested_stem = self.current_source_path.stem
+        suggested = self._language_export_path(suggested_stem, ".mp3")
         filename, _ = QFileDialog.getSaveFileName(
-            self, "Сохранить MP3", suggested, "Аудиофайлы MP3 (*.mp3);;Все файлы (*.*)"
+            self,
+            "Сохранить MP3",
+            str(suggested),
+            "Аудиофайлы MP3 (*.mp3);;Все файлы (*.*)",
         )
         if not filename:
             return
-        if not Path(filename).suffix:
-            filename += ".mp3"
         try:
-            target = Path(filename)
+            target = self._language_export_path(filename, ".mp3")
             target.write_bytes(self.audio_path.read_bytes())
-            self.statusBar().showMessage(f"Аудио сохранено: {filename}")
+            self.statusBar().showMessage(f"Аудио сохранено: {target}")
         except OSError as exc:
             self._show_error(f"Не удалось сохранить MP3 файл: {exc}")
 
@@ -918,22 +929,23 @@ class MainWindow(QMainWindow):
         if not original and not translation and not transcription:
             QMessageBox.information(self, APP_TITLE, "Нет текста для сохранения.")
             return
-        suggested = "перевод.txt"
+        suggested_stem = "перевод"
         if self.current_source_path:
-            suffix = self.current_language.translation_code.lower().replace("-", "_")
-            suggested = f"{self.current_source_path.stem}_{suffix}.txt"
+            suggested_stem = self.current_source_path.stem
+        suggested = self._language_export_path(suggested_stem, ".txt")
         filename, _ = QFileDialog.getSaveFileName(
-            self, "Сохранить оригинал и перевод", suggested, TEXT_FILTER
+            self,
+            "Сохранить оригинал, перевод и транскрипцию",
+            str(suggested),
+            TEXT_FILTER,
         )
         if not filename:
             return
-        if not Path(filename).suffix:
-            filename += ".txt"
+        target = self._language_export_path(filename, ".txt")
         try:
-            save_document(Path(filename), Document(original, translation, transcription))
+            save_document(target, Document(original, translation, transcription))
             self._dirty = False
-            self.current_source_path = Path(filename)
-            self.statusBar().showMessage(f"Сохранено: {filename}")
+            self.statusBar().showMessage(f"Сохранено: {target}")
         except AppError as exc:
             self._show_error(str(exc))
 

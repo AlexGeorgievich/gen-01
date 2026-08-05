@@ -13,6 +13,7 @@ class LanguageProfile:
     key: str
     label: str
     translation_code: str
+    file_suffix: str
     voice_prefix: str
     transcription_mode: TranscriptionMode
     default_voice: str
@@ -24,6 +25,7 @@ LANGUAGES: tuple[LanguageProfile, ...] = (
         key="French",
         label="French",
         translation_code="fr",
+        file_suffix="fr",
         voice_prefix="fr-",
         transcription_mode="latin",
         default_voice="fr-FR-DeniseNeural",
@@ -36,6 +38,7 @@ LANGUAGES: tuple[LanguageProfile, ...] = (
         key="Spanish",
         label="Spanish",
         translation_code="es",
+        file_suffix="es",
         voice_prefix="es-",
         transcription_mode="latin",
         default_voice="es-ES-ElviraNeural",
@@ -48,6 +51,7 @@ LANGUAGES: tuple[LanguageProfile, ...] = (
         key="Japan",
         label="Japan",
         translation_code="ja",
+        file_suffix="jp",
         voice_prefix="ja-",
         transcription_mode="romaji",
         default_voice="ja-JP-NanamiNeural",
@@ -60,6 +64,7 @@ LANGUAGES: tuple[LanguageProfile, ...] = (
         key="Chine",
         label="Chine",
         translation_code="zh-CN",
+        file_suffix="zh",
         voice_prefix="zh-",
         transcription_mode="pinyin",
         default_voice="zh-CN-XiaoxiaoNeural",

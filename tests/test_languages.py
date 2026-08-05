@@ -20,6 +20,15 @@ def test_language_profiles_have_distinct_translation_targets():
     assert {profile.translation_code for profile in LANGUAGES} == {"fr", "es", "ja", "zh-CN"}
 
 
+def test_language_profiles_have_expected_file_suffixes():
+    assert {profile.key: profile.file_suffix for profile in LANGUAGES} == {
+        "French": "fr",
+        "Spanish": "es",
+        "Japan": "jp",
+        "Chine": "zh",
+    }
+
+
 def test_unknown_language_falls_back_to_chine():
     assert get_language("unknown").key == DEFAULT_LANGUAGE_KEY
 
