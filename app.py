@@ -126,6 +126,21 @@ class MainWindow(QMainWindow):
         self.transcription_edit.setPlaceholderText("Здесь появится транскрипция…")
         self.transcription_edit.setAcceptRichText(False)
 
+        self.source_title = QLabel("Исходный текст")
+        self.translation_title = QLabel("Перевод")
+        self.transcription_title = QLabel("Транскрипция")
+        for title in (self.source_title, self.translation_title, self.transcription_title):
+            title.setStyleSheet("font-weight: 600;")
+        self.source_clear_button = QPushButton("Очистка")
+        self.translation_clear_button = QPushButton("Очистка")
+        self.transcription_clear_button = QPushButton("Очистка")
+        for button in (
+            self.source_clear_button,
+            self.translation_clear_button,
+            self.transcription_clear_button,
+        ):
+            button.setMaximumWidth(90)
+
         self.open_button = QPushButton("Открыть…")
         self.batch_button = QPushButton("Пакет…")
         self.translate_button = QPushButton("Перевести")
@@ -220,10 +235,10 @@ class MainWindow(QMainWindow):
             LOGGER.warning("Could not save recent directory: %s", directory)
 
     def _update_language_labels(self) -> None:
-        self.translation_box.setTitle(f"Перевод — {self.current_language.label}")
+        self.translation_title.setText(f"Перевод — {self.current_language.label}")
         mode_names = {"pinyin": "пиньинь", "romaji": "ромадзи", "latin": "латиница"}
         mode_name = mode_names[self.current_language.transcription_mode]
-        self.transcription_box.setTitle(f"Транскрипция — {mode_name}")
+        self.transcription_title.setText(f"Транскрипция — {mode_name}")
 
     @Slot()
     def _on_language_changed(self) -> None:
@@ -276,16 +291,31 @@ class MainWindow(QMainWindow):
         toolbar.addSeparator()
         toolbar.addWidget(self.settings_button)
 
-        source_box = QGroupBox("Исходный текст")
+        source_box = QGroupBox()
         source_layout = QVBoxLayout(source_box)
+        source_header = QHBoxLayout()
+        source_header.addWidget(self.source_title)
+        source_header.addStretch(1)
+        source_header.addWidget(self.source_clear_button)
+        source_layout.addLayout(source_header)
         source_layout.addWidget(self.source_edit)
 
-        self.translation_box = QGroupBox("Перевод")
+        self.translation_box = QGroupBox()
         translation_layout = QVBoxLayout(self.translation_box)
+        translation_header = QHBoxLayout()
+        translation_header.addWidget(self.translation_title)
+        translation_header.addStretch(1)
+        translation_header.addWidget(self.translation_clear_button)
+        translation_layout.addLayout(translation_header)
         translation_layout.addWidget(self.translation_edit)
 
-        self.transcription_box = QGroupBox("Транскрипция")
+        self.transcription_box = QGroupBox()
         transcription_layout = QVBoxLayout(self.transcription_box)
+        transcription_header = QHBoxLayout()
+        transcription_header.addWidget(self.transcription_title)
+        transcription_header.addStretch(1)
+        transcription_header.addWidget(self.transcription_clear_button)
+        transcription_layout.addLayout(transcription_header)
         transcription_layout.addWidget(self.transcription_edit)
 
         self.editors = QSplitter()
@@ -337,6 +367,9 @@ class MainWindow(QMainWindow):
         self.settings_button.clicked.connect(self.open_settings)
         self.reload_voices_button.clicked.connect(self.load_voices)
         self.transcription_toggle_button.clicked.connect(self._toggle_transcription_window)
+        self.source_clear_button.clicked.connect(self.clear_source_window)
+        self.translation_clear_button.clicked.connect(self.clear_translation_window)
+        self.transcription_clear_button.clicked.connect(self.clear_transcription_window)
         self.language_combo.currentIndexChanged.connect(self._on_language_changed)
         self.voice_combo.currentIndexChanged.connect(self._on_voice_changed)
         self.translation_edit.textChanged.connect(self._on_translation_changed)
@@ -810,6 +843,23 @@ class MainWindow(QMainWindow):
         self.transcription_edit.blockSignals(True)
         self.transcription_edit.setPlainText(transcription)
         self.transcription_edit.blockSignals(False)
+
+    @Slot()
+    def clear_source_window(self) -> None:
+        self.source_edit.clear()
+
+    @Slot()
+    def clear_translation_window(self) -> None:
+        if not self.translation_edit.toPlainText():
+            return
+        self.translation_edit.blockSignals(True)
+        self.translation_edit.clear()
+        self.translation_edit.blockSignals(False)
+        self._on_text_changed()
+
+    @Slot()
+    def clear_transcription_window(self) -> None:
+        self.transcription_edit.clear()
 
     def _set_translation(self, text: str) -> None:
         self.translation_edit.setPlainText(text)
