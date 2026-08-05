@@ -23,6 +23,7 @@ from PySide6.QtGui import (
 from PySide6.QtMultimedia import QAudioOutput, QMediaPlayer
 from PySide6.QtWidgets import (
     QApplication,
+    QCheckBox,
     QComboBox,
     QDialog,
     QDialogButtonBox,
@@ -45,7 +46,12 @@ from PySide6.QtWidgets import (
 
 from gpt01.batch import BatchProcessor, BatchResult
 from gpt01.errors import AppError
-from gpt01.exporting import EXPORT_LABELS, ExportKind, export_document
+from gpt01.exporting import (
+    EXPORT_LABELS,
+    ExportKind,
+    ExportLayout,
+    export_document,
+)
 from gpt01.language_controller import LanguageController
 from gpt01.languages import LANGUAGES
 from gpt01.models import Document
@@ -1099,9 +1105,10 @@ class MainWindow(QMainWindow):
         if not original and not translation and not transcription:
             QMessageBox.information(self, APP_TITLE, "Нет текста для сохранения.")
             return
-        export_kind = self._select_export_kind()
-        if export_kind is None:
+        export_selection = self._select_export_kind()
+        if export_selection is None:
             return
+        export_kind, export_layout = export_selection
         if export_kind == ExportKind.LEARNING_KIT and (
             not self.audio_path or not self.audio_path.is_file()
         ):
@@ -1130,6 +1137,7 @@ class MainWindow(QMainWindow):
                 Document(original, translation, transcription),
                 export_kind,
                 self.audio_path,
+                layout=export_layout,
             )
             self._remember_directory("last_export_directory", target.parent)
             if export_kind in {ExportKind.FULL, ExportKind.LEARNING_KIT}:
@@ -1141,7 +1149,7 @@ class MainWindow(QMainWindow):
         except AppError as exc:
             self._show_error(str(exc))
 
-    def _select_export_kind(self) -> ExportKind | None:
+    def _select_export_kind(self) -> tuple[ExportKind, ExportLayout] | None:
         dialog = QDialog(self)
         dialog.setWindowTitle("Формат экспорта")
         form = QFormLayout(dialog)
@@ -1149,6 +1157,25 @@ class MainWindow(QMainWindow):
         for kind, label in EXPORT_LABELS.items():
             kind_combo.addItem(label, kind.value)
         form.addRow("Содержимое файла:", kind_combo)
+        columns_checkbox = QCheckBox(
+            "Построчно в три колонки, блоками по 10 строк",
+            dialog,
+        )
+        columns_checkbox.setToolTip(
+            "Если выключено, содержимое первого, второго и третьего окна "
+            "сохраняется последовательными разделами."
+        )
+        form.addRow("Макет полного документа:", columns_checkbox)
+
+        def update_layout_availability() -> None:
+            kind = ExportKind(str(kind_combo.currentData()))
+            enabled = kind in {ExportKind.FULL, ExportKind.LEARNING_KIT}
+            columns_checkbox.setEnabled(enabled)
+            if not enabled:
+                columns_checkbox.setChecked(False)
+
+        kind_combo.currentIndexChanged.connect(update_layout_availability)
+        update_layout_availability()
         buttons = QDialogButtonBox(
             QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel,
             parent=dialog,
@@ -1158,7 +1185,13 @@ class MainWindow(QMainWindow):
         form.addRow(buttons)
         if dialog.exec() != QDialog.DialogCode.Accepted:
             return None
-        return ExportKind(str(kind_combo.currentData()))
+        kind = ExportKind(str(kind_combo.currentData()))
+        layout = (
+            ExportLayout.THREE_COLUMNS
+            if columns_checkbox.isEnabled() and columns_checkbox.isChecked()
+            else ExportLayout.SEQUENTIAL
+        )
+        return kind, layout
 
     @Slot(str)
     def _show_error(self, message: str) -> None:
