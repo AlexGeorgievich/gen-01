@@ -16,6 +16,9 @@ def test_state_round_trip(tmp_path):
         volume=0.5,
         current_source_path="example.txt",
         audio_file="last_audio.mp3",
+        tts_rate=20,
+        tts_pitch=-10,
+        tts_volume=15,
     )
     save_app_state(path, expected)
     assert load_app_state(path) == expected
@@ -48,3 +51,17 @@ def test_legacy_visibility_field_is_supported(tmp_path):
     path = tmp_path / "state.json"
     path.write_text('{"translation_visible": false}', encoding="utf-8")
     assert load_app_state(path).transcription_visible is False
+
+
+def test_tts_settings_are_clamped_when_loading(tmp_path):
+    path = tmp_path / "state.json"
+    path.write_text(
+        '{"tts_rate": 900, "tts_pitch": -900, "tts_volume": "invalid"}',
+        encoding="utf-8",
+    )
+
+    assert load_app_state(path).tts_settings.edge_options() == {
+        "rate": "+100%",
+        "pitch": "-100Hz",
+        "volume": "+0%",
+    }

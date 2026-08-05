@@ -12,6 +12,7 @@ from deep_translator import GoogleTranslator
 
 from .errors import NetworkServiceError, OperationCancelled
 from .text import split_text
+from .tts import TtsSettings
 
 
 class TranslationProvider(Protocol):
@@ -25,6 +26,8 @@ class SpeechProvider(Protocol):
         voice: str,
         output: Path,
         cancelled: Callable[[], bool] | None = None,
+        *,
+        settings: TtsSettings | None = None,
     ) -> None: ...
 
 
@@ -106,10 +109,18 @@ class EdgeSpeechProvider:
         voice: str,
         output: Path,
         cancelled: Callable[[], bool] | None = None,
+        *,
+        settings: TtsSettings | None = None,
     ) -> None:
+        active_settings = settings or TtsSettings()
+
         async def run() -> None:
             await asyncio.wait_for(
-                edge_tts.Communicate(text=text, voice=voice).save(str(output)),
+                edge_tts.Communicate(
+                    text=text,
+                    voice=voice,
+                    **active_settings.edge_options(),
+                ).save(str(output)),
                 timeout=self.timeout,
             )
 

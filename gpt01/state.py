@@ -5,10 +5,12 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
 
+from .tts import TtsSettings
+
 
 @dataclass(slots=True)
 class AppState:
-    version: int = 1
+    version: int = 2
     original: str = ""
     translation: str = ""
     transcription: str = ""
@@ -19,6 +21,13 @@ class AppState:
     volume: float = 0.9
     current_source_path: str = ""
     audio_file: str = ""
+    tts_rate: int = 0
+    tts_pitch: int = 0
+    tts_volume: int = 0
+
+    @property
+    def tts_settings(self) -> TtsSettings:
+        return TtsSettings.normalized(self.tts_rate, self.tts_pitch, self.tts_volume)
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> AppState:
@@ -26,6 +35,11 @@ class AppState:
         sizes = data.get("splitter_sizes", defaults.splitter_sizes)
         if not isinstance(sizes, list) or not all(isinstance(item, int) for item in sizes):
             sizes = defaults.splitter_sizes
+        tts = TtsSettings.normalized(
+            data.get("tts_rate", 0),
+            data.get("tts_pitch", 0),
+            data.get("tts_volume", 0),
+        )
         return cls(
             original=str(data.get("original", "")),
             translation=str(data.get("translation", "")),
@@ -39,6 +53,9 @@ class AppState:
             volume=min(1.0, max(0.0, float(data.get("volume", 0.9)))),
             current_source_path=str(data.get("current_source_path", "")),
             audio_file=str(data.get("audio_file", "")),
+            tts_rate=tts.rate,
+            tts_pitch=tts.pitch,
+            tts_volume=tts.volume,
         )
 
 

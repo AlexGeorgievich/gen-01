@@ -59,6 +59,7 @@ from gpt01.structured_translation import (
     translate_preserving_layout,
 )
 from gpt01.tasks import TaskManager
+from gpt01.tts import TtsSettings
 
 APP_TITLE = "Многоязычный переводчик + Microsoft TTS"
 VOICE_LOAD_TIMEOUT_SECONDS = 15
@@ -99,6 +100,7 @@ class MainWindow(QMainWindow):
         self.player.setAudioOutput(self.audio_output)
         self.audio_output.setVolume(0.9)
         self.speech = EdgeSpeechProvider(TTS_TIMEOUT_SECONDS)
+        self.tts_settings = TtsSettings()
 
         self.source_edit = QTextEdit()
         self.source_edit.setPlaceholderText("Введите или откройте исходный текст…")
@@ -327,8 +329,26 @@ class MainWindow(QMainWindow):
         font_size.setSuffix(" pt")
         font_size.setValue(self.preferences.editor_font_size)
 
+        speech_rate = QSpinBox(dialog)
+        speech_rate.setRange(-100, 100)
+        speech_rate.setSuffix(" %")
+        speech_rate.setValue(self.tts_settings.rate)
+
+        speech_pitch = QSpinBox(dialog)
+        speech_pitch.setRange(-100, 100)
+        speech_pitch.setSuffix(" Hz")
+        speech_pitch.setValue(self.tts_settings.pitch)
+
+        speech_volume = QSpinBox(dialog)
+        speech_volume.setRange(-100, 100)
+        speech_volume.setSuffix(" %")
+        speech_volume.setValue(self.tts_settings.volume)
+
         form.addRow("Базовый язык первого окна:", source_combo)
         form.addRow("Размер шрифта текстовых окон:", font_size)
+        form.addRow("Скорость TTS:", speech_rate)
+        form.addRow("Высота тона TTS:", speech_pitch)
+        form.addRow("Громкость синтеза TTS:", speech_volume)
 
         buttons = QDialogButtonBox(
             QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel,
@@ -344,10 +364,18 @@ class MainWindow(QMainWindow):
             source_language_key=str(source_combo.currentData()),
             editor_font_size=font_size.value(),
         )
+        updated_tts_settings = TtsSettings.normalized(
+            speech_rate.value(), speech_pitch.value(), speech_volume.value()
+        )
+        tts_changed = updated_tts_settings != self.tts_settings
+        self.tts_settings = updated_tts_settings
         self.language_controller.select_source(self.preferences.source_language_key)
         self._apply_editor_font_size()
+        if tts_changed:
+            self._reset_audio_state()
         try:
             self.repository.save_preferences(self.preferences)
+            self._save_app_state()
             self.statusBar().showMessage("Настройки сохранены.")
         except OSError as exc:
             self._show_error(f"Не удалось сохранить настройки: {exc}")
@@ -564,6 +592,7 @@ class MainWindow(QMainWindow):
         if not voice:
             QMessageBox.information(self, APP_TITLE, "Выберите голос.")
             return
+        tts_settings = self.tts_settings
         self.stop_audio()
         self._audio_line_number = None
         self._replay_highlight_line = None
@@ -573,7 +602,13 @@ class MainWindow(QMainWindow):
         output = Path(filename)
 
         def synthesize(cancelled: Callable[[], bool]) -> str:
-            self.speech.synthesize(text, voice, output, cancelled)
+            self.speech.synthesize(
+                text,
+                voice,
+                output,
+                cancelled,
+                settings=tts_settings,
+            )
             return str(output)
 
         self._run_task(
@@ -608,6 +643,7 @@ class MainWindow(QMainWindow):
         if not voice:
             QMessageBox.information(self, APP_TITLE, "Выберите голос.")
             return
+        tts_settings = self.tts_settings
 
         self.stop_audio()
 
@@ -620,7 +656,13 @@ class MainWindow(QMainWindow):
             os.close(fd)
             output = Path(filename)
 
-            self.speech.synthesize(target_text, voice, output, cancelled)
+            self.speech.synthesize(
+                target_text,
+                voice,
+                output,
+                cancelled,
+                settings=tts_settings,
+            )
             return (str(output), target_text)
 
         def on_ready(result: tuple[str, str]) -> None:
@@ -820,13 +862,20 @@ class MainWindow(QMainWindow):
         if not voice:
             self._stop_sequence("Голос не выбран.")
             return
+        tts_settings = self.tts_settings
 
         def prepare_line(cancelled: Callable[[], bool]) -> tuple[str, str, bool]:
             target_text = translated_text or self.translator.translate(source_text, cancelled)
             fd, filename = tempfile.mkstemp(prefix="gpt01_sequence_tts_", suffix=".mp3")
             os.close(fd)
             output = Path(filename)
-            self.speech.synthesize(target_text, voice, output, cancelled)
+            self.speech.synthesize(
+                target_text,
+                voice,
+                output,
+                cancelled,
+                settings=tts_settings,
+            )
             return str(output), target_text, not bool(translated_text)
 
         def play_line(result: tuple[str, str, bool]) -> None:
@@ -1008,6 +1057,7 @@ class MainWindow(QMainWindow):
             if voice_index >= 0:
                 self.voice_combo.setCurrentIndex(voice_index)
         self.audio_output.setVolume(state.volume)
+        self.tts_settings = state.tts_settings
         self._set_transcription_window_visible(state.transcription_visible)
         if len(state.splitter_sizes) == 3:
             self.editors.setSizes(state.splitter_sizes)
@@ -1042,6 +1092,9 @@ class MainWindow(QMainWindow):
             window_geometry=geometry,
             volume=self.audio_output.volume(),
             current_source_path=str(self.current_source_path or ""),
+            tts_rate=self.tts_settings.rate,
+            tts_pitch=self.tts_settings.pitch,
+            tts_volume=self.tts_settings.volume,
         )
         try:
             self.repository.save_session(self.current_language, state, self.audio_path)
