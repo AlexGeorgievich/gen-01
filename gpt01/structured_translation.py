@@ -92,6 +92,8 @@ def translate_preserving_layout(
     total_chunks = sum(len(group) for group in request_groups)
     completed = 0
     translated_parts: list[list[str]] = [[] for _line in source_lines]
+    if progress:
+        progress(0, total_chunks)
 
     for group in request_groups:
         if cancelled and cancelled():

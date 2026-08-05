@@ -11,16 +11,19 @@ from .errors import OperationCancelled
 
 LOGGER = logging.getLogger(__name__)
 TaskFunction = Callable[[Callable[[], bool]], Any]
+ProgressReporter = Callable[[int, int, str], None]
+ProgressTaskFunction = Callable[[Callable[[], bool], ProgressReporter], Any]
 
 
 class WorkerSignals(QObject):
     result = Signal(object)
     error = Signal(str)
+    progress = Signal(int, int, str)
     finished = Signal()
 
 
 class Worker(QRunnable):
-    def __init__(self, function: TaskFunction) -> None:
+    def __init__(self, function: ProgressTaskFunction) -> None:
         super().__init__()
         self.function = function
         self.signals = WorkerSignals()
@@ -32,7 +35,7 @@ class Worker(QRunnable):
     @Slot()
     def run(self) -> None:
         try:
-            result = self.function(self._cancelled.is_set)
+            result = self.function(self._cancelled.is_set, self.signals.progress.emit)
             if not self._cancelled.is_set():
                 self.signals.result.emit(result)
         except OperationCancelled:
@@ -62,12 +65,32 @@ class TaskManager(QObject):
         *,
         foreground: bool = True,
     ) -> Worker:
+        return self.start_with_progress(
+            lambda cancelled, _report: function(cancelled),
+            on_result,
+            on_error,
+            on_finished,
+            foreground=foreground,
+        )
+
+    def start_with_progress(
+        self,
+        function: ProgressTaskFunction,
+        on_result: Callable[[Any], None],
+        on_error: Callable[[str], None],
+        on_finished: Callable[[], None],
+        on_progress: ProgressReporter | None = None,
+        *,
+        foreground: bool = True,
+    ) -> Worker:
         worker = Worker(function)
         self._workers.add(worker)
         if foreground:
             self.foreground = worker
         worker.signals.result.connect(on_result)
         worker.signals.error.connect(on_error)
+        if on_progress:
+            worker.signals.progress.connect(on_progress)
 
         def finish() -> None:
             self._workers.discard(worker)

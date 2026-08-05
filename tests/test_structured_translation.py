@@ -60,7 +60,7 @@ def test_translation_reports_chunk_progress():
         limit=6,
     )
 
-    assert updates == [(1, 3), (2, 3), (3, 3)]
+    assert updates == [(0, 3), (1, 3), (2, 3), (3, 3)]
 
 
 def test_adjacent_short_lines_are_translated_in_one_request():

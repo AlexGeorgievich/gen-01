@@ -366,8 +366,49 @@ class MainWindow(QMainWindow):
 
         self.tasks.start(fn, on_result, on_error or self._show_error, _finished)
 
-    def _set_busy(self, busy: bool, message: str) -> None:
+    def _run_progress_task(
+        self,
+        fn: Callable[
+            [Callable[[], bool], Callable[[int, int, str], None]],
+            Any,
+        ],
+        on_result: Callable[[Any], None],
+        busy_text: str,
+        on_error: Callable[[str], None] | None = None,
+    ) -> None:
+        self._set_busy(True, busy_text, determinate=True)
+
+        def _finished() -> None:
+            self._set_busy(False, "Готово")
+
+        self.tasks.start_with_progress(
+            fn,
+            on_result,
+            on_error or self._show_error,
+            _finished,
+            self._update_progress,
+        )
+
+    @Slot(int, int, str)
+    def _update_progress(self, current: int, total: int, message: str) -> None:
+        maximum = max(1, total)
+        self.progress.setRange(0, maximum)
+        self.progress.setValue(min(max(0, current), maximum))
+        self.progress.setFormat("%v / %m")
+        self.statusBar().showMessage(message)
+
+    def _set_busy(self, busy: bool, message: str, *, determinate: bool = False) -> None:
         self.progress.setVisible(busy)
+        if busy and determinate:
+            self.progress.setRange(0, 1)
+            self.progress.setValue(0)
+            self.progress.setFormat("%v / %m")
+        elif busy:
+            self.progress.setRange(0, 0)
+            self.progress.setFormat("")
+        else:
+            self.progress.setRange(0, 0)
+            self.progress.setFormat("")
         self.translate_button.setEnabled(not busy)
         self.speak_button.setEnabled(not busy)
         self.open_button.setEnabled(not busy)
@@ -409,10 +450,26 @@ class MainWindow(QMainWindow):
             QMessageBox.information(self, APP_TITLE, "Введите исходный текст.")
             return
 
-        def translate(cancelled: Callable[[], bool]) -> StructuredTranslationResult:
-            return translate_preserving_layout(text, self.translator, cancelled)
+        def translate(
+            cancelled: Callable[[], bool],
+            report: Callable[[int, int, str], None],
+        ) -> StructuredTranslationResult:
+            return translate_preserving_layout(
+                text,
+                self.translator,
+                cancelled,
+                lambda current, total: report(
+                    current,
+                    total,
+                    f"Перевод: обработано частей {current} из {total}",
+                ),
+            )
 
-        self._run_task(translate, self._set_structured_translation, "Перевод по абзацам…")
+        self._run_progress_task(
+            translate,
+            self._set_structured_translation,
+            "Подготовка структурированного перевода…",
+        )
 
     def _set_structured_translation(self, result: StructuredTranslationResult) -> None:
         self._set_translation(result.text)
