@@ -8,11 +8,16 @@ from gpt01.languages import (
 
 
 def test_required_language_profiles_exist():
-    assert {profile.key for profile in LANGUAGES} == {"French", "Japan", "Chine"}
+    assert {profile.key for profile in LANGUAGES} == {
+        "French",
+        "Spanish",
+        "Japan",
+        "Chine",
+    }
 
 
 def test_language_profiles_have_distinct_translation_targets():
-    assert {profile.translation_code for profile in LANGUAGES} == {"fr", "ja", "zh-CN"}
+    assert {profile.translation_code for profile in LANGUAGES} == {"fr", "es", "ja", "zh-CN"}
 
 
 def test_unknown_language_falls_back_to_chine():

@@ -33,6 +33,18 @@ LANGUAGES: tuple[LanguageProfile, ...] = (
         ),
     ),
     LanguageProfile(
+        key="Spanish",
+        label="Spanish",
+        translation_code="es",
+        voice_prefix="es-",
+        transcription_mode="latin",
+        default_voice="es-ES-ElviraNeural",
+        fallback_voices=(
+            {"ShortName": "es-ES-ElviraNeural", "Locale": "es-ES", "Gender": "Female"},
+            {"ShortName": "es-ES-AlvaroNeural", "Locale": "es-ES", "Gender": "Male"},
+        ),
+    ),
+    LanguageProfile(
         key="Japan",
         label="Japan",
         translation_code="ja",
