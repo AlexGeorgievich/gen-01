@@ -27,12 +27,15 @@ class SpeechProvider(Protocol):
 
 
 class GoogleTranslationProvider:
-    def __init__(self, target_language: str = "zh-CN") -> None:
+    def __init__(self, target_language: str = "zh-CN", source_language: str = "auto") -> None:
         self.target_language = target_language
+        self.source_language = source_language
 
     def translate(self, text: str, cancelled: Callable[[], bool] | None = None) -> str:
         try:
-            translator = GoogleTranslator(source="auto", target=self.target_language)
+            translator = GoogleTranslator(
+                source=self.source_language, target=self.target_language
+            )
             translated: list[str] = []
             for chunk in split_text(text):
                 if cancelled and cancelled():

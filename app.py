@@ -27,7 +27,10 @@ from PySide6.QtMultimedia import QAudioOutput, QMediaPlayer
 from PySide6.QtWidgets import (
     QApplication,
     QComboBox,
+    QDialog,
+    QDialogButtonBox,
     QFileDialog,
+    QFormLayout,
     QGroupBox,
     QHBoxLayout,
     QLabel,
@@ -35,6 +38,7 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QProgressBar,
     QPushButton,
+    QSpinBox,
     QSplitter,
     QStatusBar,
     QTextEdit,
@@ -51,6 +55,7 @@ from gpt01.languages import (
     save_selected_language,
 )
 from gpt01.models import Document
+from gpt01.preferences import Preferences, load_preferences, save_preferences
 from gpt01.services import EdgeSpeechProvider, GoogleTranslationProvider
 from gpt01.state import AppState, load_app_state, save_app_state
 from gpt01.storage import load_document, save_document
@@ -66,6 +71,7 @@ LEGACY_STATE_PATH = Path(__file__).parent / "app_state.json"
 LEGACY_AUDIO_PATH = Path(__file__).parent / "last_audio.mp3"
 LANGUAGE_DATA_ROOT = Path(__file__).parent / "language_data"
 LANGUAGE_SELECTION_PATH = Path(__file__).parent / "language_selection.json"
+PREFERENCES_PATH = Path(__file__).parent / "settings.json"
 logging.basicConfig(
     filename=LOG_PATH,
     level=logging.INFO,
@@ -125,13 +131,16 @@ class MainWindow(QMainWindow):
         self._sequence_generation = 0
         self._switching_language = False
         self.current_language = get_language(load_selected_language(LANGUAGE_SELECTION_PATH))
+        self.preferences = load_preferences(PREFERENCES_PATH)
         self.current_source_path: Path | None = None
         self.audio_path: Path | None = None
         self.player = QMediaPlayer(self)
         self.audio_output = QAudioOutput(self)
         self.player.setAudioOutput(self.audio_output)
         self.audio_output.setVolume(0.9)
-        self.translator = GoogleTranslationProvider(self.current_language.translation_code)
+        self.translator = GoogleTranslationProvider(
+            self.current_language.translation_code, self._source_language_code()
+        )
         self.speech = EdgeSpeechProvider(TTS_TIMEOUT_SECONDS)
 
         self.source_edit = QTextEdit()
@@ -157,6 +166,7 @@ class MainWindow(QMainWindow):
         self.save_audio_button = QPushButton("Сохранить MP3…")
         self.save_audio_button.setEnabled(False)
         self.save_button = QPushButton("Сохранить текст…")
+        self.settings_button = QPushButton("Setting")
 
         self.language_combo = QComboBox()
         self.voice_combo = QComboBox()
@@ -179,6 +189,19 @@ class MainWindow(QMainWindow):
             self.voice_status.setText("Доступны встроенные голоса.")
         self._update_language_labels()
         self._restore_app_state()
+        self._apply_editor_font_size()
+
+    def _source_language_code(self) -> str:
+        if self.preferences.source_language_key == "auto":
+            return "auto"
+        return get_language(self.preferences.source_language_key).translation_code
+
+    def _apply_editor_font_size(self) -> None:
+        for editor in (self.source_edit, self.translation_edit, self.transcription_edit):
+            font = editor.font()
+            font.setPointSize(self.preferences.editor_font_size)
+            editor.setFont(font)
+            editor.document().setDefaultFont(font)
 
     def _populate_languages(self) -> None:
         self.language_combo.blockSignals(True)
@@ -255,7 +278,9 @@ class MainWindow(QMainWindow):
             self.audio_path = None
 
             self.current_language = profile
-            self.translator = GoogleTranslationProvider(profile.translation_code)
+            self.translator = GoogleTranslationProvider(
+                profile.translation_code, self._source_language_code()
+            )
             self._ensure_language_directory()
             self._update_language_labels()
             self._populate_voices(self._load_cached_voices())
@@ -292,6 +317,8 @@ class MainWindow(QMainWindow):
         toolbar.addSeparator()
         toolbar.addWidget(self.save_audio_button)
         toolbar.addWidget(self.save_button)
+        toolbar.addSeparator()
+        toolbar.addWidget(self.settings_button)
 
         source_box = QGroupBox("Исходный текст")
         source_layout = QVBoxLayout(source_box)
@@ -350,6 +377,7 @@ class MainWindow(QMainWindow):
         self.cancel_button.clicked.connect(self.cancel_operation)
         self.save_audio_button.clicked.connect(self.save_audio)
         self.save_button.clicked.connect(self.save_file)
+        self.settings_button.clicked.connect(self.open_settings)
         self.reload_voices_button.clicked.connect(self.load_voices)
         self.transcription_toggle_button.clicked.connect(self._toggle_transcription_window)
         self.language_combo.currentIndexChanged.connect(self._on_language_changed)
@@ -366,6 +394,51 @@ class MainWindow(QMainWindow):
         self.player.errorOccurred.connect(
             lambda _error, message: self._show_error(f"Ошибка воспроизведения: {message}")
         )
+
+    @Slot()
+    def open_settings(self) -> None:
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Setting")
+        form = QFormLayout(dialog)
+
+        source_combo = QComboBox(dialog)
+        source_combo.addItem("Автоопределение", "auto")
+        for profile in LANGUAGES:
+            source_combo.addItem(profile.label, profile.key)
+        source_index = source_combo.findData(self.preferences.source_language_key)
+        source_combo.setCurrentIndex(max(0, source_index))
+
+        font_size = QSpinBox(dialog)
+        font_size.setRange(8, 32)
+        font_size.setSuffix(" pt")
+        font_size.setValue(self.preferences.editor_font_size)
+
+        form.addRow("Базовый язык первого окна:", source_combo)
+        form.addRow("Размер шрифта текстовых окон:", font_size)
+
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel,
+            parent=dialog,
+        )
+        buttons.accepted.connect(dialog.accept)
+        buttons.rejected.connect(dialog.reject)
+        form.addRow(buttons)
+
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+        self.preferences = Preferences(
+            source_language_key=str(source_combo.currentData()),
+            editor_font_size=font_size.value(),
+        )
+        self.translator = GoogleTranslationProvider(
+            self.current_language.translation_code, self._source_language_code()
+        )
+        self._apply_editor_font_size()
+        try:
+            save_preferences(PREFERENCES_PATH, self.preferences)
+            self.statusBar().showMessage("Настройки сохранены.")
+        except OSError as exc:
+            self._show_error(f"Не удалось сохранить настройки: {exc}")
 
     def _run_task(
         self,
