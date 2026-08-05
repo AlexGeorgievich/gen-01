@@ -5,6 +5,7 @@ from gpt01.exporting import (
     ExportKind,
     ExportLayout,
     export_document,
+    render_columns,
     render_export,
     render_three_columns,
 )
@@ -96,3 +97,27 @@ def test_learning_kit_supports_three_column_layout(tmp_path):
     assert target.read_text(encoding="utf-8").startswith(
         "Исходный текст\tПеревод\tТранскрипция"
     )
+
+
+def test_translation_only_supports_column_layout_and_ten_row_blocks():
+    values = "\n".join(f"translation {index}" for index in range(11))
+
+    rendered = render_columns(Document(translation=values), ExportKind.TRANSLATION)
+
+    assert rendered.count("Перевод") == 2
+    assert "translation 9\n\nПеревод\ntranslation 10" in rendered
+    assert "Исходный текст" not in rendered
+
+
+def test_bilingual_supports_two_column_layout():
+    rendered = render_export(
+        Document("one\ntwo", "un\ndeux", "ignored"),
+        ExportKind.BILINGUAL,
+        ExportLayout.THREE_COLUMNS,
+    )
+
+    assert rendered.splitlines() == [
+        "Исходный текст\tПеревод",
+        "one\tun",
+        "two\tdeux",
+    ]

@@ -1208,24 +1208,14 @@ class MainWindow(QMainWindow):
             kind_combo.addItem(label, kind.value)
         form.addRow("Содержимое файла:", kind_combo)
         columns_checkbox = QCheckBox(
-            "Построчно в три колонки, блоками по 10 строк",
+            "Построчно по колонкам, блоками по 10 строк",
             dialog,
         )
         columns_checkbox.setToolTip(
-            "Если выключено, содержимое первого, второго и третьего окна "
-            "сохраняется последовательными разделами."
+            "В зависимости от режима выводится одна, две или три колонки. "
+            "Если выключено, данные сохраняются последовательными разделами."
         )
-        form.addRow("Макет полного документа:", columns_checkbox)
-
-        def update_layout_availability() -> None:
-            kind = ExportKind(str(kind_combo.currentData()))
-            enabled = kind in {ExportKind.FULL, ExportKind.LEARNING_KIT}
-            columns_checkbox.setEnabled(enabled)
-            if not enabled:
-                columns_checkbox.setChecked(False)
-
-        kind_combo.currentIndexChanged.connect(update_layout_availability)
-        update_layout_availability()
+        form.addRow("Макет документа:", columns_checkbox)
         buttons = QDialogButtonBox(
             QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel,
             parent=dialog,
@@ -1238,7 +1228,7 @@ class MainWindow(QMainWindow):
         kind = ExportKind(str(kind_combo.currentData()))
         layout = (
             ExportLayout.THREE_COLUMNS
-            if columns_checkbox.isEnabled() and columns_checkbox.isChecked()
+            if columns_checkbox.isChecked()
             else ExportLayout.SEQUENTIAL
         )
         return kind, layout

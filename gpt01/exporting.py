@@ -36,7 +36,11 @@ class ExportResult:
     audio_path: Path | None = None
 
 
-def render_three_columns(document: Document, block_size: int = 10) -> str:
+def render_columns(
+    document: Document,
+    kind: ExportKind,
+    block_size: int = 10,
+) -> str:
     if block_size <= 0:
         raise ValueError("block_size must be greater than zero")
 
@@ -46,13 +50,22 @@ def render_three_columns(document: Document, block_size: int = 10) -> str:
             values.pop()
         return values
 
-    columns = [
-        lines(document.original),
-        lines(document.translation),
-        lines(document.transcription),
-    ]
+    if kind == ExportKind.TRANSLATION:
+        definitions = [("Перевод", document.translation)]
+    elif kind == ExportKind.BILINGUAL:
+        definitions = [
+            ("Исходный текст", document.original),
+            ("Перевод", document.translation),
+        ]
+    else:
+        definitions = [
+            ("Исходный текст", document.original),
+            ("Перевод", document.translation),
+            ("Транскрипция", document.transcription),
+        ]
+    headers = tuple(header for header, _text in definitions)
+    columns = [lines(text) for _header, text in definitions]
     row_count = max((len(column) for column in columns), default=0)
-    headers = ("Исходный текст", "Перевод", "Транскрипция")
     blocks: list[str] = []
     for start in range(0, row_count, block_size):
         rows = ["\t".join(headers)]
@@ -66,15 +79,18 @@ def render_three_columns(document: Document, block_size: int = 10) -> str:
     return "\n\n".join(blocks) + "\n" if blocks else "\t".join(headers) + "\n"
 
 
+def render_three_columns(document: Document, block_size: int = 10) -> str:
+    """Backward-compatible full-document column renderer."""
+    return render_columns(document, ExportKind.FULL, block_size)
+
+
 def render_export(
     document: Document,
     kind: ExportKind,
     layout: ExportLayout = ExportLayout.SEQUENTIAL,
 ) -> str:
     if layout == ExportLayout.THREE_COLUMNS:
-        if kind not in {ExportKind.FULL, ExportKind.LEARNING_KIT}:
-            raise ValueError("three-column layout requires a full document")
-        return render_three_columns(document)
+        return render_columns(document, kind)
     if kind == ExportKind.TRANSLATION:
         return f"{document.translation.rstrip()}\n"
     if kind == ExportKind.BILINGUAL:
