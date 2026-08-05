@@ -43,6 +43,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from gpt01.batch import BatchProcessor, BatchResult
 from gpt01.errors import AppError
 from gpt01.language_controller import LanguageController
 from gpt01.languages import LANGUAGES
@@ -119,6 +120,7 @@ class MainWindow(QMainWindow):
         self.transcription_edit.setAcceptRichText(False)
 
         self.open_button = QPushButton("Открыть…")
+        self.batch_button = QPushButton("Пакет…")
         self.translate_button = QPushButton("Перевести")
         self.speak_button = QPushButton("Озвучить")
         self.replay_button = QPushButton("Повторить")
@@ -254,6 +256,7 @@ class MainWindow(QMainWindow):
         toolbar = self.addToolBar("Команды")
         toolbar.setMovable(False)
         toolbar.addWidget(self.open_button)
+        toolbar.addWidget(self.batch_button)
         toolbar.addSeparator()
         toolbar.addWidget(self.translate_button)
         toolbar.addWidget(self.speak_button)
@@ -316,6 +319,7 @@ class MainWindow(QMainWindow):
 
     def _connect_signals(self) -> None:
         self.open_button.clicked.connect(self.open_file)
+        self.batch_button.clicked.connect(self.batch_process_files)
         self.translate_button.clicked.connect(self.translate_text)
         self.speak_button.clicked.connect(self.speak_text)
         self.replay_button.clicked.connect(self.replay_audio)
@@ -472,6 +476,9 @@ class MainWindow(QMainWindow):
         self.translate_button.setEnabled(not busy)
         self.speak_button.setEnabled(not busy)
         self.open_button.setEnabled(not busy)
+        self.batch_button.setEnabled(not busy)
+        self.settings_button.setEnabled(not busy)
+        self.language_combo.setEnabled(not busy and self.reload_voices_button.isEnabled())
         self.cancel_button.setEnabled(busy)
         playing = self.player.playbackState() == QMediaPlayer.PlaybackState.PlayingState
         self.stop_button.setEnabled(busy or playing or self.sequence.active)
@@ -508,6 +515,57 @@ class MainWindow(QMainWindow):
         except AppError as exc:
             self._loading_document = False
             self._show_error(str(exc))
+
+    @Slot()
+    def batch_process_files(self) -> None:
+        filenames, _ = QFileDialog.getOpenFileNames(
+            self,
+            "Выберите документы для пакетного перевода",
+            self._open_dialog_directory(),
+            OPEN_FILTER,
+        )
+        if not filenames:
+            return
+        paths = [Path(filename) for filename in filenames]
+        self._remember_directory("last_open_directory", paths[0].parent)
+        processor = BatchProcessor(self.repository, self.current_language, self.translator)
+
+        def process(
+            cancelled: Callable[[], bool],
+            report: Callable[[int, int, str], None],
+        ) -> BatchResult:
+            return processor.process(paths, cancelled, report)
+
+        self._run_progress_task(
+            process,
+            self._batch_completed,
+            f"Пакетный перевод: 0 из {len(paths)}",
+        )
+
+    def _batch_completed(self, result: BatchResult) -> None:
+        succeeded = result.succeeded
+        failed = result.failed
+        if succeeded and succeeded[-1].output:
+            self._remember_directory("last_export_directory", succeeded[-1].output.parent)
+        summary = f"Успешно: {len(succeeded)} из {len(result.items)}."
+        if failed:
+            details = "\n".join(
+                f"• {item.source.name}: {item.error}" for item in failed[:5]
+            )
+            if len(failed) > 5:
+                details += f"\n…и ещё ошибок: {len(failed) - 5}"
+            QMessageBox.warning(
+                self,
+                APP_TITLE,
+                f"Пакетная обработка завершена.\n\n{summary}\n\n{details}",
+            )
+        else:
+            QMessageBox.information(
+                self,
+                APP_TITLE,
+                f"Пакетная обработка завершена.\n\n{summary}",
+            )
+        self.statusBar().showMessage(summary)
 
     @Slot()
     def translate_text(self) -> None:
@@ -561,7 +619,7 @@ class MainWindow(QMainWindow):
         )
         def _finished() -> None:
             self.reload_voices_button.setEnabled(True)
-            self.language_combo.setEnabled(True)
+            self.language_combo.setEnabled(not self.progress.isVisible())
 
         self.tasks.start(
             lambda _cancelled: asyncio.run(fetch()),
