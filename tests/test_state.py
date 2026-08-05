@@ -8,9 +8,9 @@ def test_state_round_trip(tmp_path):
     expected = AppState(
         original="source",
         translation="你好",
-        transliteration="nǐ hǎo",
+        transcription="nǐ hǎo",
         selected_voice="zh-CN-XiaoxiaoNeural",
-        translation_visible=False,
+        transcription_visible=False,
         splitter_sizes=[600, 0, 600],
         window_geometry="Z2VvbWV0cnk=",
         volume=0.5,
@@ -42,3 +42,9 @@ def test_volume_is_clamped_when_loading(tmp_path):
     path = tmp_path / "state.json"
     path.write_text('{"volume": 12}', encoding="utf-8")
     assert load_app_state(path).volume == 1.0
+
+
+def test_legacy_visibility_field_is_supported(tmp_path):
+    path = tmp_path / "state.json"
+    path.write_text('{"translation_visible": false}', encoding="utf-8")
+    assert load_app_state(path).transcription_visible is False

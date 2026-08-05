@@ -2,8 +2,8 @@ from gpt01.models import Document
 from gpt01.storage import (
     LEGACY_TRANSLATION_MARKER,
     ORIGINAL_MARKER,
+    TRANSCRIPTION_MARKER,
     TRANSLATION_MARKER,
-    TRANSLITERATION_MARKER,
     decode_text,
     parse_document,
     serialize_document,
@@ -45,6 +45,6 @@ def test_serialized_document_has_trailing_newline():
 def test_parse_three_column_format():
     text = (
         f"{ORIGINAL_MARKER}\nsource\n{TRANSLATION_MARKER}\ntranslation\n"
-        f"{TRANSLITERATION_MARKER}\npinyin"
+        f"{TRANSCRIPTION_MARKER}\npinyin"
     )
     assert parse_document(text) == Document("source", "translation", "pinyin")

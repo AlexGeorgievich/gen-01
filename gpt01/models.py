@@ -5,7 +5,7 @@ from dataclasses import dataclass
 class Document:
     original: str = ""
     translation: str = ""
-    transliteration: str = ""
+    transcription: str = ""
 
 
 @dataclass(frozen=True, slots=True)

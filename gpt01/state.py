@@ -11,9 +11,9 @@ class AppState:
     version: int = 1
     original: str = ""
     translation: str = ""
-    transliteration: str = ""
+    transcription: str = ""
     selected_voice: str = ""
-    translation_visible: bool = True
+    transcription_visible: bool = True
     splitter_sizes: list[int] = field(default_factory=lambda: [420, 420, 420])
     window_geometry: str = ""
     volume: float = 0.9
@@ -29,9 +29,11 @@ class AppState:
         return cls(
             original=str(data.get("original", "")),
             translation=str(data.get("translation", "")),
-            transliteration=str(data.get("transliteration", "")),
+            transcription=str(data.get("transcription", data.get("transliteration", ""))),
             selected_voice=str(data.get("selected_voice", "")),
-            translation_visible=bool(data.get("translation_visible", True)),
+            transcription_visible=bool(
+                data.get("transcription_visible", data.get("translation_visible", True))
+            ),
             splitter_sizes=sizes,
             window_geometry=str(data.get("window_geometry", "")),
             volume=min(1.0, max(0.0, float(data.get("volume", 0.9)))),

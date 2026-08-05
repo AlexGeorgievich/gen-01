@@ -44,38 +44,35 @@ from PySide6.QtWidgets import (
 )
 
 from gpt01.errors import AppError, OperationCancelled
+from gpt01.languages import (
+    LANGUAGES,
+    LanguageProfile,
+    get_language,
+    load_selected_language,
+    save_selected_language,
+)
 from gpt01.models import Document
 from gpt01.services import EdgeSpeechProvider, GoogleTranslationProvider
 from gpt01.state import AppState, load_app_state, save_app_state
 from gpt01.storage import load_document, save_document
 from gpt01.text import numbered_nonempty_lines
-from gpt01.transliteration import to_pinyin
+from gpt01.transcription import transcribe
 
-APP_TITLE = "Переводчик на китайский + Microsoft TTS"
-DEFAULT_VOICE = "zh-CN-XiaoxiaoNeural"
+APP_TITLE = "Многоязычный переводчик + Microsoft TTS"
 VOICE_LOAD_TIMEOUT_SECONDS = 15
 TTS_TIMEOUT_SECONDS = 90
 TEXT_FILTER = "Текстовые файлы (*.txt);;Все файлы (*.*)"
-CACHE_PATH = Path(__file__).parent / "voices_cache.json"
 LOG_PATH = Path(__file__).parent / "gpt01.log"
-STATE_PATH = Path(__file__).parent / "app_state.json"
-LAST_AUDIO_PATH = Path(__file__).parent / "last_audio.mp3"
+LEGACY_STATE_PATH = Path(__file__).parent / "app_state.json"
+LEGACY_AUDIO_PATH = Path(__file__).parent / "last_audio.mp3"
+LANGUAGE_DATA_ROOT = Path(__file__).parent / "language_data"
+LANGUAGE_SELECTION_PATH = Path(__file__).parent / "language_selection.json"
 logging.basicConfig(
     filename=LOG_PATH,
     level=logging.INFO,
     format="%(asctime)s %(levelname)s %(name)s: %(message)s",
 )
 LOGGER = logging.getLogger(__name__)
-
-
-FALLBACK_VOICES: list[dict[str, str]] = [
-    {"ShortName": "zh-CN-XiaoxiaoNeural", "Locale": "zh-CN", "Gender": "Female"},
-    {"ShortName": "zh-CN-YunxiNeural", "Locale": "zh-CN", "Gender": "Male"},
-    {"ShortName": "zh-CN-YunjianNeural", "Locale": "zh-CN", "Gender": "Male"},
-    {"ShortName": "zh-CN-XiaoyiNeural", "Locale": "zh-CN", "Gender": "Female"},
-    {"ShortName": "zh-HK-HiuGaaiNeural", "Locale": "zh-HK", "Gender": "Female"},
-    {"ShortName": "zh-TW-HsiaoChenNeural", "Locale": "zh-TW", "Gender": "Female"},
-]
 
 
 class WorkerSignals(QObject):
@@ -127,13 +124,15 @@ class MainWindow(QMainWindow):
         self._sequence_lines: list[tuple[int, str]] = []
         self._sequence_index = 0
         self._sequence_generation = 0
+        self._switching_language = False
+        self.current_language = get_language(load_selected_language(LANGUAGE_SELECTION_PATH))
         self.current_source_path: Path | None = None
         self.audio_path: Path | None = None
         self.player = QMediaPlayer(self)
         self.audio_output = QAudioOutput(self)
         self.player.setAudioOutput(self.audio_output)
         self.audio_output.setVolume(0.9)
-        self.translator = GoogleTranslationProvider()
+        self.translator = GoogleTranslationProvider(self.current_language.translation_code)
         self.speech = EdgeSpeechProvider(TTS_TIMEOUT_SECONDS)
 
         self.source_edit = QTextEdit()
@@ -141,11 +140,11 @@ class MainWindow(QMainWindow):
         self.source_edit.viewport().setMouseTracking(True)
         self.source_edit.viewport().installEventFilter(self)
         self.translation_edit = QTextEdit()
-        self.translation_edit.setPlaceholderText("Здесь появится перевод на китайский язык…")
+        self.translation_edit.setPlaceholderText("Здесь появится перевод…")
         self.translation_edit.setAcceptRichText(False)
-        self.transliteration_edit = QTextEdit()
-        self.transliteration_edit.setPlaceholderText("Здесь появится пиньинь латиницей…")
-        self.transliteration_edit.setAcceptRichText(False)
+        self.transcription_edit = QTextEdit()
+        self.transcription_edit.setPlaceholderText("Здесь появится транскрипция…")
+        self.transcription_edit.setAcceptRichText(False)
 
         self.open_button = QPushButton("Открыть…")
         self.translate_button = QPushButton("Перевести")
@@ -160,37 +159,116 @@ class MainWindow(QMainWindow):
         self.save_audio_button.setEnabled(False)
         self.save_button = QPushButton("Сохранить текст…")
 
+        self.language_combo = QComboBox()
         self.voice_combo = QComboBox()
         self.voice_status = QLabel()
         self.voice_status.setWordWrap(True)
         self.reload_voices_button = QPushButton("Обновить список голосов из сети")
-        self.show_translation_button = QPushButton("+")
-        self.show_translation_button.setToolTip("Открыть окно с иероглифами")
-        self.show_translation_button.setFixedWidth(32)
-        self.show_translation_button.setEnabled(False)
-        self.hide_translation_button = QPushButton("−")
-        self.hide_translation_button.setToolTip("Скрыть окно с иероглифами")
-        self.hide_translation_button.setFixedWidth(32)
+        self.transcription_toggle_button = QPushButton("−")
+        self.transcription_toggle_button.setToolTip("Скрыть окно транскрипции")
+        self.transcription_toggle_button.setFixedWidth(32)
 
         self._build_ui()
+        self._populate_languages()
         self._connect_signals()
+        self._ensure_language_directory()
         cached_voices = self._load_cached_voices()
         self._populate_voices(cached_voices)
-        if CACHE_PATH.exists():
+        if self._voice_cache_path().exists():
             self.voice_status.setText(f"Загружено голосов из кэша: {len(cached_voices)}")
         else:
             self.voice_status.setText("Доступны встроенные голоса.")
+        self._update_language_labels()
         self._restore_app_state()
 
+    def _populate_languages(self) -> None:
+        self.language_combo.blockSignals(True)
+        self.language_combo.clear()
+        selected_index = 0
+        for index, profile in enumerate(LANGUAGES):
+            self.language_combo.addItem(profile.label, profile.key)
+            if profile.key == self.current_language.key:
+                selected_index = index
+        self.language_combo.setCurrentIndex(selected_index)
+        self.language_combo.blockSignals(False)
+
+    def _language_directory(self, profile: LanguageProfile | None = None) -> Path:
+        return LANGUAGE_DATA_ROOT / (profile or self.current_language).key
+
+    def _state_path(self) -> Path:
+        return self._language_directory() / "app_state.json"
+
+    def _last_audio_path(self) -> Path:
+        return self._language_directory() / "last_audio.mp3"
+
+    def _voice_cache_path(self) -> Path:
+        return self._language_directory() / "voices_cache.json"
+
+    def _ensure_language_directory(self) -> None:
+        try:
+            self._language_directory().mkdir(parents=True, exist_ok=True)
+        except OSError:
+            LOGGER.exception("Could not create language directory: %s", self.current_language.key)
+
+    @staticmethod
+    def _delete_temporary_audio(path: Path | None) -> None:
+        if not path:
+            return
+        try:
+            temp_root = Path(tempfile.gettempdir()).resolve()
+            if path.parent.resolve() == temp_root and path.name.startswith("gpt01_"):
+                path.unlink(missing_ok=True)
+        except OSError:
+            LOGGER.warning("Could not remove temporary audio: %s", path)
+
+    def _update_language_labels(self) -> None:
+        self.translation_box.setTitle(f"Перевод — {self.current_language.label}")
+        mode_names = {"pinyin": "пиньинь", "romaji": "ромадзи", "latin": "латиница"}
+        mode_name = mode_names[self.current_language.transcription_mode]
+        self.transcription_box.setTitle(f"Транскрипция — {mode_name}")
+
+    @Slot()
+    def _on_language_changed(self) -> None:
+        if self._switching_language:
+            return
+        key = str(self.language_combo.currentData() or "")
+        profile = get_language(key)
+        if profile.key == self.current_language.key:
+            return
+
+        self._switching_language = True
+        try:
+            self.stop_current_operation()
+            self._save_app_state()
+            previous_audio = self.audio_path
+            self.player.setSource(QUrl())
+            self._delete_temporary_audio(previous_audio)
+            self.audio_path = None
+
+            self.current_language = profile
+            self.translator = GoogleTranslationProvider(profile.translation_code)
+            self._ensure_language_directory()
+            self._update_language_labels()
+            self._populate_voices(self._load_cached_voices())
+            self._restore_app_state()
+            save_selected_language(LANGUAGE_SELECTION_PATH, profile.key)
+            self.voice_status.setText(f"Выбран язык: {profile.label}")
+        except OSError as exc:
+            LOGGER.exception("Could not switch language")
+            self._show_error(f"Не удалось переключить язык: {exc}")
+        finally:
+            self._switching_language = False
+
     def _load_cached_voices(self) -> list[dict[str, Any]]:
-        if CACHE_PATH.exists():
+        cache_path = self._voice_cache_path()
+        if cache_path.exists():
             try:
-                data = json.loads(CACHE_PATH.read_text(encoding="utf-8"))
+                data = json.loads(cache_path.read_text(encoding="utf-8"))
                 if isinstance(data, list) and data:
                     return data
             except Exception:
                 pass
-        return FALLBACK_VOICES
+        return list(self.current_language.fallback_voices)
 
     def _build_ui(self) -> None:
         toolbar = self.addToolBar("Файл")
@@ -204,30 +282,32 @@ class MainWindow(QMainWindow):
         source_layout = QVBoxLayout(source_box)
         source_layout.addWidget(self.source_edit)
 
-        self.translation_box = QGroupBox("Перевод (китайский, упрощённый)")
+        self.translation_box = QGroupBox("Перевод")
         translation_layout = QVBoxLayout(self.translation_box)
         translation_layout.addWidget(self.translation_edit)
 
-        transliteration_box = QGroupBox("Транслитерация (пиньинь, латиница)")
-        transliteration_layout = QVBoxLayout(transliteration_box)
-        transliteration_layout.addWidget(self.transliteration_edit)
+        self.transcription_box = QGroupBox("Транскрипция")
+        transcription_layout = QVBoxLayout(self.transcription_box)
+        transcription_layout.addWidget(self.transcription_edit)
 
         self.editors = QSplitter()
         self.editors.addWidget(source_box)
         self.editors.addWidget(self.translation_box)
-        self.editors.addWidget(transliteration_box)
+        self.editors.addWidget(self.transcription_box)
         self.editors.setSizes([420, 420, 420])
 
-        translation_controls = QHBoxLayout()
-        translation_controls.addWidget(QLabel("Окно «Иероглифы»:"))
-        translation_controls.addWidget(self.show_translation_button)
-        translation_controls.addWidget(self.hide_translation_button)
-        translation_controls.addStretch(1)
+        transcription_controls = QHBoxLayout()
+        transcription_controls.addWidget(QLabel("Окно «Транскрипция»:"))
+        transcription_controls.addWidget(self.transcription_toggle_button)
+        transcription_controls.addStretch(1)
 
-        voice_box = QGroupBox("Китайские голоса Microsoft TTS")
+        voice_box = QGroupBox("Язык и голос Microsoft TTS")
         voice_box_layout = QHBoxLayout(voice_box)
-        voice_box_layout.addWidget(self.voice_status)
+        voice_box_layout.addWidget(QLabel("Язык:"))
+        voice_box_layout.addWidget(self.language_combo)
+        voice_box_layout.addWidget(QLabel("Голос:"))
         voice_box_layout.addWidget(self.voice_combo, 1)
+        voice_box_layout.addWidget(self.voice_status)
         voice_box_layout.addWidget(self.reload_voices_button)
 
         buttons = QHBoxLayout()
@@ -244,7 +324,7 @@ class MainWindow(QMainWindow):
         central = QWidget()
         layout = QVBoxLayout(central)
         layout.addWidget(voice_box)
-        layout.addLayout(translation_controls)
+        layout.addLayout(transcription_controls)
         layout.addWidget(self.editors, 1)
         layout.addLayout(buttons)
         self.setCentralWidget(central)
@@ -268,16 +348,12 @@ class MainWindow(QMainWindow):
         self.save_audio_button.clicked.connect(self.save_audio)
         self.save_button.clicked.connect(self.save_file)
         self.reload_voices_button.clicked.connect(self.load_voices)
-        self.show_translation_button.clicked.connect(
-            lambda: self._set_translation_window_visible(True)
-        )
-        self.hide_translation_button.clicked.connect(
-            lambda: self._set_translation_window_visible(False)
-        )
+        self.transcription_toggle_button.clicked.connect(self._toggle_transcription_window)
+        self.language_combo.currentIndexChanged.connect(self._on_language_changed)
         self.voice_combo.currentIndexChanged.connect(self._on_voice_changed)
         self.translation_edit.textChanged.connect(self._on_translation_changed)
         self.source_edit.textChanged.connect(self._on_text_changed)
-        self.transliteration_edit.textChanged.connect(self._on_text_changed)
+        self.transcription_edit.textChanged.connect(self._on_text_changed)
         self.line_shortcut = QShortcut(QKeySequence("Ctrl+Space"), self)
         self.line_shortcut.activated.connect(self.speak_line_at_cursor)
         self.player.playbackStateChanged.connect(self._playback_changed)
@@ -334,8 +410,9 @@ class MainWindow(QMainWindow):
             self._loading_document = True
             self.source_edit.setPlainText(document.original)
             self.translation_edit.setPlainText(document.translation)
-            self.transliteration_edit.setPlainText(
-                document.transliteration or to_pinyin(document.translation)
+            self.transcription_edit.setPlainText(
+                document.transcription
+                or transcribe(document.translation, self.current_language.transcription_mode)
             )
             self._loading_document = False
             self._dirty = False
@@ -359,16 +436,27 @@ class MainWindow(QMainWindow):
 
     @Slot()
     def load_voices(self) -> None:
-        async def fetch() -> list[dict[str, Any]]:
+        profile = self.current_language
+
+        async def fetch() -> tuple[str, list[dict[str, Any]]]:
             voices = await asyncio.wait_for(
                 edge_tts.list_voices(), timeout=VOICE_LOAD_TIMEOUT_SECONDS
             )
-            return sorted(
-                (v for v in voices if str(v.get("Locale", "")).startswith("zh-")),
-                key=lambda v: (str(v.get("Locale")), str(v.get("ShortName"))),
+            filtered = sorted(
+                (
+                    v
+                    for v in voices
+                    if str(v.get("Locale", "")).startswith(profile.voice_prefix)
+                ),
+                key=lambda voice: (
+                    str(voice.get("Locale")),
+                    str(voice.get("ShortName")),
+                ),
             )
+            return profile.key, filtered
 
         self.reload_voices_button.setEnabled(False)
+        self.language_combo.setEnabled(False)
         self.voice_status.setText(
             f"Обновление списка голосов (не более {VOICE_LOAD_TIMEOUT_SECONDS} секунд)…"
         )
@@ -380,14 +468,18 @@ class MainWindow(QMainWindow):
         def _finished() -> None:
             self._workers.discard(worker)
             self.reload_voices_button.setEnabled(True)
+            self.language_combo.setEnabled(True)
 
         worker.signals.finished.connect(_finished)
         self.thread_pool.start(worker)
 
-    def _voices_loaded(self, voices: list[dict[str, Any]]) -> None:
+    def _voices_loaded(self, result: tuple[str, list[dict[str, Any]]]) -> None:
+        language_key, voices = result
+        if language_key != self.current_language.key:
+            return
         if voices:
             try:
-                CACHE_PATH.write_text(
+                self._voice_cache_path().write_text(
                     json.dumps(voices, ensure_ascii=False, indent=2), encoding="utf-8"
                 )
             except OSError:
@@ -396,7 +488,8 @@ class MainWindow(QMainWindow):
             self.voice_status.setText(f"Загружено голосов из сети: {len(voices)} (сохранено в кэш)")
         else:
             self.voice_status.setText(
-                "Сервис не вернул китайские голоса. Используется сохранённый список."
+                "Сервис не вернул голоса выбранного языка. "
+                "Используется сохранённый список."
             )
 
     @Slot(str)
@@ -420,7 +513,7 @@ class MainWindow(QMainWindow):
             gender = str(voice.get("Gender", ""))
             locale = str(voice.get("Locale", ""))
             self.voice_combo.addItem(f"{name} ({locale} · {gender})", userData=name)
-            if name == DEFAULT_VOICE:
+            if name == self.current_language.default_voice:
                 selected_index = idx
         if self.voice_combo.count() > 0:
             self.voice_combo.setCurrentIndex(selected_index)
@@ -435,7 +528,7 @@ class MainWindow(QMainWindow):
         voice = self.selected_voice()
         if not text:
             QMessageBox.information(
-                self, APP_TITLE, "Сначала переведите или введите китайский текст."
+                self, APP_TITLE, "Сначала переведите или введите текст перевода."
             )
             return
         if not voice:
@@ -523,10 +616,7 @@ class MainWindow(QMainWindow):
         self.replay_button.setEnabled(True)
         self.save_audio_button.setEnabled(True)
         if previous_audio and previous_audio != self.audio_path:
-            try:
-                previous_audio.unlink(missing_ok=True)
-            except OSError:
-                pass
+            self._delete_temporary_audio(previous_audio)
 
     @Slot()
     def _on_voice_changed(self) -> None:
@@ -541,18 +631,28 @@ class MainWindow(QMainWindow):
     @Slot()
     def _on_translation_changed(self) -> None:
         self._on_text_changed()
-        pinyin = to_pinyin(self.translation_edit.toPlainText())
-        self.transliteration_edit.blockSignals(True)
-        self.transliteration_edit.setPlainText(pinyin)
-        self.transliteration_edit.blockSignals(False)
+        transcription = transcribe(
+            self.translation_edit.toPlainText(), self.current_language.transcription_mode
+        )
+        self.transcription_edit.blockSignals(True)
+        self.transcription_edit.setPlainText(transcription)
+        self.transcription_edit.blockSignals(False)
 
     def _set_translation(self, text: str) -> None:
         self.translation_edit.setPlainText(text)
 
-    def _set_translation_window_visible(self, visible: bool) -> None:
-        self.translation_box.setVisible(visible)
-        self.show_translation_button.setEnabled(not visible)
-        self.hide_translation_button.setEnabled(visible)
+    @Slot()
+    def _toggle_transcription_window(self) -> None:
+        self._set_transcription_window_visible(self.transcription_box.isHidden())
+
+    def _set_transcription_window_visible(self, visible: bool) -> None:
+        self.transcription_box.setVisible(visible)
+        self.transcription_toggle_button.setText("−" if visible else "+")
+        self.transcription_toggle_button.setToolTip(
+            "Скрыть окно транскрипции"
+            if visible
+            else "Открыть окно транскрипции"
+        )
         if visible:
             width = max(self.editors.width(), 3)
             self.editors.setSizes([width // 3, width // 3, width // 3])
@@ -594,7 +694,7 @@ class MainWindow(QMainWindow):
             self.translation_edit, self._replay_highlight_line, QColor("#ffd54f")
         )
         self._set_line_highlight(
-            self.transliteration_edit, self._replay_highlight_line, QColor("#ffd54f")
+            self.transcription_edit, self._replay_highlight_line, QColor("#ffd54f")
         )
 
     @staticmethod
@@ -635,10 +735,7 @@ class MainWindow(QMainWindow):
         if self.audio_path:
             old_path = self.audio_path
             self.audio_path = None
-            try:
-                old_path.unlink(missing_ok=True)
-            except OSError:
-                pass
+            self._delete_temporary_audio(old_path)
         self.replay_button.setEnabled(bool(self.source_edit.toPlainText().strip()))
         self.save_audio_button.setEnabled(False)
         if not self.progress.isVisible():
@@ -711,7 +808,9 @@ class MainWindow(QMainWindow):
             if translation_was_missing:
                 self._set_parallel_line(self.translation_edit, line_number, target_text)
                 self._set_parallel_line(
-                    self.transliteration_edit, line_number, to_pinyin(target_text)
+                    self.transcription_edit,
+                    line_number,
+                    transcribe(target_text, self.current_language.transcription_mode),
                 )
                 self._dirty = True
             self._audio_line_number = line_number
@@ -788,7 +887,8 @@ class MainWindow(QMainWindow):
             return
         suggested = "озвучка.mp3"
         if self.current_source_path:
-            suggested = f"{self.current_source_path.stem}_zh.mp3"
+            suffix = self.current_language.translation_code.lower().replace("-", "_")
+            suggested = f"{self.current_source_path.stem}_{suffix}.mp3"
         filename, _ = QFileDialog.getSaveFileName(
             self, "Сохранить MP3", suggested, "Аудиофайлы MP3 (*.mp3);;Все файлы (*.*)"
         )
@@ -819,13 +919,14 @@ class MainWindow(QMainWindow):
     def save_file(self) -> None:
         original = self.source_edit.toPlainText()
         translation = self.translation_edit.toPlainText()
-        transliteration = self.transliteration_edit.toPlainText()
-        if not original and not translation and not transliteration:
+        transcription = self.transcription_edit.toPlainText()
+        if not original and not translation and not transcription:
             QMessageBox.information(self, APP_TITLE, "Нет текста для сохранения.")
             return
         suggested = "перевод.txt"
         if self.current_source_path:
-            suggested = f"{self.current_source_path.stem}_zh.txt"
+            suffix = self.current_language.translation_code.lower().replace("-", "_")
+            suggested = f"{self.current_source_path.stem}_{suffix}.txt"
         filename, _ = QFileDialog.getSaveFileName(
             self, "Сохранить оригинал и перевод", suggested, TEXT_FILTER
         )
@@ -834,7 +935,7 @@ class MainWindow(QMainWindow):
         if not Path(filename).suffix:
             filename += ".txt"
         try:
-            save_document(Path(filename), Document(original, translation, transliteration))
+            save_document(Path(filename), Document(original, translation, transcription))
             self._dirty = False
             self.current_source_path = Path(filename)
             self.statusBar().showMessage(f"Сохранено: {filename}")
@@ -863,11 +964,19 @@ class MainWindow(QMainWindow):
         return answer == QMessageBox.StandardButton.Yes
 
     def _restore_app_state(self) -> None:
-        state = load_app_state(STATE_PATH)
+        state_path = self._state_path()
+        load_path = state_path
+        if (
+            not state_path.exists()
+            and self.current_language.key == "Chine"
+            and LEGACY_STATE_PATH.exists()
+        ):
+            load_path = LEGACY_STATE_PATH
+        state = load_app_state(load_path)
         self._loading_document = True
         self.source_edit.setPlainText(state.original)
         self.translation_edit.setPlainText(state.translation)
-        self.transliteration_edit.setPlainText(state.transliteration)
+        self.transcription_edit.setPlainText(state.transcription)
         self._loading_document = False
         self._dirty = False
 
@@ -876,7 +985,7 @@ class MainWindow(QMainWindow):
             if voice_index >= 0:
                 self.voice_combo.setCurrentIndex(voice_index)
         self.audio_output.setVolume(state.volume)
-        self._set_translation_window_visible(state.translation_visible)
+        self._set_transcription_window_visible(state.transcription_visible)
         if len(state.splitter_sizes) == 3:
             self.editors.setSizes(state.splitter_sizes)
         if state.window_geometry:
@@ -888,23 +997,29 @@ class MainWindow(QMainWindow):
         if state.current_source_path:
             self.current_source_path = Path(state.current_source_path)
         if state.audio_file:
-            restored_audio = STATE_PATH.parent / state.audio_file
+            restored_audio = load_path.parent / state.audio_file
             if restored_audio.is_file():
                 self.audio_path = restored_audio
                 self.player.setSource(QUrl.fromLocalFile(str(restored_audio)))
                 self.save_audio_button.setEnabled(True)
+        elif load_path == LEGACY_STATE_PATH and LEGACY_AUDIO_PATH.is_file():
+            self.audio_path = LEGACY_AUDIO_PATH
+            self.player.setSource(QUrl.fromLocalFile(str(LEGACY_AUDIO_PATH)))
+            self.save_audio_button.setEnabled(True)
         self.replay_button.setEnabled(
             bool(self.source_edit.toPlainText().strip())
             or bool(self.audio_path and self.audio_path.exists())
         )
 
     def _save_app_state(self) -> None:
+        state_path = self._state_path()
+        last_audio_path = self._last_audio_path()
         audio_file = ""
         if self.audio_path and self.audio_path.is_file():
             try:
-                if self.audio_path.resolve() != LAST_AUDIO_PATH.resolve():
-                    shutil.copyfile(self.audio_path, LAST_AUDIO_PATH)
-                audio_file = LAST_AUDIO_PATH.name
+                if self.audio_path.resolve() != last_audio_path.resolve():
+                    shutil.copyfile(self.audio_path, last_audio_path)
+                audio_file = last_audio_path.name
             except OSError:
                 LOGGER.exception("Could not preserve the last audio file")
 
@@ -912,9 +1027,9 @@ class MainWindow(QMainWindow):
         state = AppState(
             original=self.source_edit.toPlainText(),
             translation=self.translation_edit.toPlainText(),
-            transliteration=self.transliteration_edit.toPlainText(),
+            transcription=self.transcription_edit.toPlainText(),
             selected_voice=self.selected_voice() or "",
-            translation_visible=not self.translation_box.isHidden(),
+            transcription_visible=not self.transcription_box.isHidden(),
             splitter_sizes=self.editors.sizes(),
             window_geometry=geometry,
             volume=self.audio_output.volume(),
@@ -922,7 +1037,7 @@ class MainWindow(QMainWindow):
             audio_file=audio_file,
         )
         try:
-            save_app_state(STATE_PATH, state)
+            save_app_state(state_path, state)
         except OSError:
             LOGGER.exception("Could not save application state")
 
@@ -937,11 +1052,7 @@ class MainWindow(QMainWindow):
         self._save_app_state()
         self.player.setSource(QUrl())
         if self.audio_path:
-            try:
-                if self.audio_path.resolve() != LAST_AUDIO_PATH.resolve():
-                    self.audio_path.unlink(missing_ok=True)
-            except OSError:
-                pass
+            self._delete_temporary_audio(self.audio_path)
         event.accept()
 
 

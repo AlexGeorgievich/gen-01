@@ -4,9 +4,10 @@ from .errors import StorageError
 from .models import Document
 
 ORIGINAL_MARKER = "=== ОРИГИНАЛ ==="
-TRANSLATION_MARKER = "=== ПЕРЕВОД НА КИТАЙСКИЙ ==="
-LEGACY_TRANSLATION_MARKER = "=== ПЕРЕВОД ==="
-TRANSLITERATION_MARKER = "=== ПИНЬИНЬ ==="
+TRANSLATION_MARKER = "=== ПЕРЕВОД ==="
+LEGACY_TRANSLATION_MARKER = "=== ПЕРЕВОД НА КИТАЙСКИЙ ==="
+TRANSCRIPTION_MARKER = "=== ТРАНСКРИПЦИЯ ==="
+LEGACY_TRANSCRIPTION_MARKER = "=== ПИНЬИНЬ ==="
 
 
 def decode_text(raw: bytes) -> str:
@@ -23,13 +24,21 @@ def parse_document(text: str) -> Document:
     )
     if ORIGINAL_MARKER in text and marker:
         original, translation = text.split(marker, 1)
-        transliteration = ""
-        if TRANSLITERATION_MARKER in translation:
-            translation, transliteration = translation.split(TRANSLITERATION_MARKER, 1)
+        transcription = ""
+        transcription_marker = next(
+            (
+                item
+                for item in (TRANSCRIPTION_MARKER, LEGACY_TRANSCRIPTION_MARKER)
+                if item in translation
+            ),
+            None,
+        )
+        if transcription_marker:
+            translation, transcription = translation.split(transcription_marker, 1)
         return Document(
             original.replace(ORIGINAL_MARKER, "").strip(),
             translation.strip(),
-            transliteration.strip(),
+            transcription.strip(),
         )
     return Document(original=text)
 
@@ -38,7 +47,7 @@ def serialize_document(document: Document) -> str:
     return (
         f"{ORIGINAL_MARKER}\n{document.original.rstrip()}\n\n"
         f"{TRANSLATION_MARKER}\n{document.translation.rstrip()}\n\n"
-        f"{TRANSLITERATION_MARKER}\n{document.transliteration.rstrip()}\n"
+        f"{TRANSCRIPTION_MARKER}\n{document.transcription.rstrip()}\n"
     )
 
 
