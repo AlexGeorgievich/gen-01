@@ -64,6 +64,11 @@ from gpt01.tts import TtsSettings
 APP_TITLE = "Многоязычный переводчик + Microsoft TTS"
 VOICE_LOAD_TIMEOUT_SECONDS = 15
 TTS_TIMEOUT_SECONDS = 90
+OPEN_FILTER = (
+    "Поддерживаемые документы (*.txt *.docx *.srt);;"
+    "Текстовые файлы (*.txt);;Документы Word (*.docx);;"
+    "Субтитры SubRip (*.srt);;Все файлы (*.*)"
+)
 TEXT_FILTER = "Текстовые файлы (*.txt);;Все файлы (*.*)"
 LOG_PATH = Path(__file__).parent / "gpt01.log"
 logging.basicConfig(
@@ -483,7 +488,7 @@ class MainWindow(QMainWindow):
             self,
             "Открыть текст",
             self._open_dialog_directory(),
-            TEXT_FILTER,
+            OPEN_FILTER,
         )
         if not filename:
             return
