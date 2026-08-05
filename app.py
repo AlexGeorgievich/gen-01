@@ -45,6 +45,7 @@ from PySide6.QtWidgets import (
 
 from gpt01.batch import BatchProcessor, BatchResult
 from gpt01.errors import AppError
+from gpt01.exporting import EXPORT_LABELS, ExportKind, export_document
 from gpt01.language_controller import LanguageController
 from gpt01.languages import LANGUAGES
 from gpt01.models import Document
@@ -54,7 +55,7 @@ from gpt01.rows import build_translation_rows
 from gpt01.services import EdgeSpeechProvider
 from gpt01.session import SessionRepository
 from gpt01.state import AppState
-from gpt01.storage import load_document, save_document
+from gpt01.storage import load_document
 from gpt01.structured_translation import (
     StructuredTranslationResult,
     translate_preserving_layout,
@@ -1098,13 +1099,25 @@ class MainWindow(QMainWindow):
         if not original and not translation and not transcription:
             QMessageBox.information(self, APP_TITLE, "Нет текста для сохранения.")
             return
+        export_kind = self._select_export_kind()
+        if export_kind is None:
+            return
+        if export_kind == ExportKind.LEARNING_KIT and (
+            not self.audio_path or not self.audio_path.is_file()
+        ):
+            QMessageBox.information(
+                self,
+                APP_TITLE,
+                "Для учебного комплекта сначала выполните озвучивание.",
+            )
+            return
         suggested_stem = "перевод"
         if self.current_source_path:
             suggested_stem = self.current_source_path.stem
         suggested = self._export_dialog_path(suggested_stem, ".txt")
         filename, _ = QFileDialog.getSaveFileName(
             self,
-            "Сохранить оригинал, перевод и транскрипцию",
+            EXPORT_LABELS[export_kind],
             str(suggested),
             TEXT_FILTER,
         )
@@ -1112,12 +1125,40 @@ class MainWindow(QMainWindow):
             return
         target = self._language_export_path(filename, ".txt")
         try:
-            save_document(target, Document(original, translation, transcription))
+            result = export_document(
+                target,
+                Document(original, translation, transcription),
+                export_kind,
+                self.audio_path,
+            )
             self._remember_directory("last_export_directory", target.parent)
-            self._dirty = False
-            self.statusBar().showMessage(f"Сохранено: {target}")
+            if export_kind in {ExportKind.FULL, ExportKind.LEARNING_KIT}:
+                self._dirty = False
+            message = f"Сохранено: {result.text_path}"
+            if result.audio_path:
+                message += f"; {result.audio_path.name}"
+            self.statusBar().showMessage(message)
         except AppError as exc:
             self._show_error(str(exc))
+
+    def _select_export_kind(self) -> ExportKind | None:
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Формат экспорта")
+        form = QFormLayout(dialog)
+        kind_combo = QComboBox(dialog)
+        for kind, label in EXPORT_LABELS.items():
+            kind_combo.addItem(label, kind.value)
+        form.addRow("Содержимое файла:", kind_combo)
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel,
+            parent=dialog,
+        )
+        buttons.accepted.connect(dialog.accept)
+        buttons.rejected.connect(dialog.reject)
+        form.addRow(buttons)
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return None
+        return ExportKind(str(kind_combo.currentData()))
 
     @Slot(str)
     def _show_error(self, message: str) -> None:
