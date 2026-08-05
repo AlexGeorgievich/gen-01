@@ -12,6 +12,8 @@ from .languages import LANGUAGE_BY_KEY
 class Preferences:
     source_language_key: str = "auto"
     editor_font_size: int = 11
+    last_open_directory: str = ""
+    last_export_directory: str = ""
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> Preferences:
@@ -22,7 +24,18 @@ class Preferences:
             font_size = int(data.get("editor_font_size", 11))
         except (TypeError, ValueError):
             font_size = 11
-        return cls(source_language_key=source, editor_font_size=min(32, max(8, font_size)))
+        last_open_directory = data.get("last_open_directory", "")
+        last_export_directory = data.get("last_export_directory", "")
+        return cls(
+            source_language_key=source,
+            editor_font_size=min(32, max(8, font_size)),
+            last_open_directory=(
+                last_open_directory.strip() if isinstance(last_open_directory, str) else ""
+            ),
+            last_export_directory=(
+                last_export_directory.strip() if isinstance(last_export_directory, str) else ""
+            ),
+        )
 
 
 def load_preferences(path: Path) -> Preferences:

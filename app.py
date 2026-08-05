@@ -180,6 +180,31 @@ class MainWindow(QMainWindow):
         """Place a user-named export in the active language directory."""
         return self.repository.export_path(self.current_language, selected, extension)
 
+    def _open_dialog_directory(self) -> str:
+        directory = Path(self.preferences.last_open_directory)
+        return str(directory) if self.preferences.last_open_directory and directory.is_dir() else ""
+
+    def _export_dialog_path(self, stem: str, extension: str) -> Path:
+        suggested = self._language_export_path(stem, extension)
+        remembered = Path(self.preferences.last_export_directory)
+        if self.preferences.last_export_directory and remembered.is_dir():
+            try:
+                if remembered.resolve() == suggested.parent.resolve():
+                    return remembered / suggested.name
+            except OSError:
+                pass
+        return suggested
+
+    def _remember_directory(self, field: str, directory: Path) -> None:
+        value = str(directory.resolve())
+        if getattr(self.preferences, field) == value:
+            return
+        setattr(self.preferences, field, value)
+        try:
+            self.repository.save_preferences(self.preferences)
+        except OSError:
+            LOGGER.warning("Could not save recent directory: %s", directory)
+
     def _update_language_labels(self) -> None:
         self.translation_box.setTitle(f"Перевод — {self.current_language.label}")
         mode_names = {"pinyin": "пиньинь", "romaji": "ромадзи", "latin": "латиница"}
@@ -363,6 +388,8 @@ class MainWindow(QMainWindow):
         self.preferences = Preferences(
             source_language_key=str(source_combo.currentData()),
             editor_font_size=font_size.value(),
+            last_open_directory=self.preferences.last_open_directory,
+            last_export_directory=self.preferences.last_export_directory,
         )
         updated_tts_settings = TtsSettings.normalized(
             speech_rate.value(), speech_pitch.value(), speech_volume.value()
@@ -452,7 +479,12 @@ class MainWindow(QMainWindow):
     def open_file(self) -> None:
         if not self._confirm_discard_changes():
             return
-        filename, _ = QFileDialog.getOpenFileName(self, "Открыть текст", "", TEXT_FILTER)
+        filename, _ = QFileDialog.getOpenFileName(
+            self,
+            "Открыть текст",
+            self._open_dialog_directory(),
+            TEXT_FILTER,
+        )
         if not filename:
             return
         try:
@@ -466,6 +498,7 @@ class MainWindow(QMainWindow):
             self._loading_document = False
             self._dirty = False
             self.current_source_path = Path(filename)
+            self._remember_directory("last_open_directory", self.current_source_path.parent)
             self.statusBar().showMessage(f"Открыт: {filename}")
         except AppError as exc:
             self._loading_document = False
@@ -965,7 +998,7 @@ class MainWindow(QMainWindow):
         suggested_stem = "озвучка"
         if self.current_source_path:
             suggested_stem = self.current_source_path.stem
-        suggested = self._language_export_path(suggested_stem, ".mp3")
+        suggested = self._export_dialog_path(suggested_stem, ".mp3")
         filename, _ = QFileDialog.getSaveFileName(
             self,
             "Сохранить MP3",
@@ -977,6 +1010,7 @@ class MainWindow(QMainWindow):
         try:
             target = self._language_export_path(filename, ".mp3")
             target.write_bytes(self.audio_path.read_bytes())
+            self._remember_directory("last_export_directory", target.parent)
             self.statusBar().showMessage(f"Аудио сохранено: {target}")
         except OSError as exc:
             self._show_error(f"Не удалось сохранить MP3 файл: {exc}")
@@ -1004,7 +1038,7 @@ class MainWindow(QMainWindow):
         suggested_stem = "перевод"
         if self.current_source_path:
             suggested_stem = self.current_source_path.stem
-        suggested = self._language_export_path(suggested_stem, ".txt")
+        suggested = self._export_dialog_path(suggested_stem, ".txt")
         filename, _ = QFileDialog.getSaveFileName(
             self,
             "Сохранить оригинал, перевод и транскрипцию",
@@ -1016,6 +1050,7 @@ class MainWindow(QMainWindow):
         target = self._language_export_path(filename, ".txt")
         try:
             save_document(target, Document(original, translation, transcription))
+            self._remember_directory("last_export_directory", target.parent)
             self._dirty = False
             self.statusBar().showMessage(f"Сохранено: {target}")
         except AppError as exc:
