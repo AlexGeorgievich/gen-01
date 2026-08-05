@@ -16,7 +16,6 @@ from typing import Any
 import edge_tts
 from PySide6.QtCore import QByteArray, QEvent, QObject, QRunnable, QThreadPool, QUrl, Signal, Slot
 from PySide6.QtGui import (
-    QAction,
     QCloseEvent,
     QColor,
     QCursor,
@@ -271,12 +270,18 @@ class MainWindow(QMainWindow):
         return list(self.current_language.fallback_voices)
 
     def _build_ui(self) -> None:
-        toolbar = self.addToolBar("Файл")
+        toolbar = self.addToolBar("Команды")
         toolbar.setMovable(False)
-        open_action = QAction("Открыть…", self)
-        open_action.setShortcut("Ctrl+O")
-        open_action.triggered.connect(self.open_file)
-        toolbar.addAction(open_action)
+        toolbar.addWidget(self.open_button)
+        toolbar.addSeparator()
+        toolbar.addWidget(self.translate_button)
+        toolbar.addWidget(self.speak_button)
+        toolbar.addWidget(self.replay_button)
+        toolbar.addWidget(self.stop_button)
+        toolbar.addWidget(self.cancel_button)
+        toolbar.addSeparator()
+        toolbar.addWidget(self.save_audio_button)
+        toolbar.addWidget(self.save_button)
 
         source_box = QGroupBox("Исходный текст")
         source_layout = QVBoxLayout(source_box)
@@ -310,23 +315,11 @@ class MainWindow(QMainWindow):
         voice_box_layout.addWidget(self.voice_status)
         voice_box_layout.addWidget(self.reload_voices_button)
 
-        buttons = QHBoxLayout()
-        buttons.addWidget(self.open_button)
-        buttons.addStretch(1)
-        buttons.addWidget(self.translate_button)
-        buttons.addWidget(self.speak_button)
-        buttons.addWidget(self.replay_button)
-        buttons.addWidget(self.stop_button)
-        buttons.addWidget(self.cancel_button)
-        buttons.addWidget(self.save_audio_button)
-        buttons.addWidget(self.save_button)
-
         central = QWidget()
         layout = QVBoxLayout(central)
         layout.addWidget(voice_box)
         layout.addLayout(transcription_controls)
         layout.addWidget(self.editors, 1)
-        layout.addLayout(buttons)
         self.setCentralWidget(central)
 
         status = QStatusBar()
@@ -356,6 +349,8 @@ class MainWindow(QMainWindow):
         self.transcription_edit.textChanged.connect(self._on_text_changed)
         self.line_shortcut = QShortcut(QKeySequence("Ctrl+Space"), self)
         self.line_shortcut.activated.connect(self.speak_line_at_cursor)
+        self.open_shortcut = QShortcut(QKeySequence("Ctrl+O"), self)
+        self.open_shortcut.activated.connect(self.open_file)
         self.player.playbackStateChanged.connect(self._playback_changed)
         self.player.mediaStatusChanged.connect(self._media_status_changed)
         self.player.errorOccurred.connect(
