@@ -601,7 +601,7 @@ class MainWindow(QMainWindow):
         def on_ready(result: tuple[str, str]) -> None:
             filename, translated_line = result
             self._audio_line_number = line_number
-            self._replay_highlight_line = None
+            self._replay_highlight_line = line_number
             self._render_source_highlights()
             self.statusBar().showMessage(f"Строка: {translated_line}")
             self._play_file(filename)
