@@ -13,3 +13,11 @@ class Voice:
     short_name: str
     locale: str
     gender: str
+
+
+@dataclass(frozen=True, slots=True)
+class TranslationRow:
+    index: int
+    source: str
+    translation: str = ""
+    transcription: str = ""

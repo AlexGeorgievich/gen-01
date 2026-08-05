@@ -2,19 +2,16 @@ from __future__ import annotations
 
 import asyncio
 import base64
-import json
 import logging
 import os
-import shutil
 import sys
 import tempfile
-import threading
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
 import edge_tts
-from PySide6.QtCore import QByteArray, QEvent, QObject, QRunnable, QThreadPool, QUrl, Signal, Slot
+from PySide6.QtCore import QByteArray, QEvent, QObject, QUrl, Slot
 from PySide6.QtGui import (
     QCloseEvent,
     QColor,
@@ -46,32 +43,24 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from gpt01.errors import AppError, OperationCancelled
-from gpt01.languages import (
-    LANGUAGES,
-    LanguageProfile,
-    get_language,
-    load_selected_language,
-    save_selected_language,
-)
+from gpt01.errors import AppError
+from gpt01.language_controller import LanguageController
+from gpt01.languages import LANGUAGES
 from gpt01.models import Document
-from gpt01.preferences import Preferences, load_preferences, save_preferences
-from gpt01.services import EdgeSpeechProvider, GoogleTranslationProvider
-from gpt01.state import AppState, load_app_state, save_app_state
+from gpt01.playback import PlaybackSequence
+from gpt01.preferences import Preferences
+from gpt01.rows import build_translation_rows
+from gpt01.services import EdgeSpeechProvider
+from gpt01.session import SessionRepository
+from gpt01.state import AppState
 from gpt01.storage import load_document, save_document
-from gpt01.text import numbered_nonempty_lines
-from gpt01.transcription import transcribe
+from gpt01.tasks import TaskManager
 
 APP_TITLE = "Многоязычный переводчик + Microsoft TTS"
 VOICE_LOAD_TIMEOUT_SECONDS = 15
 TTS_TIMEOUT_SECONDS = 90
 TEXT_FILTER = "Текстовые файлы (*.txt);;Все файлы (*.*)"
 LOG_PATH = Path(__file__).parent / "gpt01.log"
-LEGACY_STATE_PATH = Path(__file__).parent / "app_state.json"
-LEGACY_AUDIO_PATH = Path(__file__).parent / "last_audio.mp3"
-LANGUAGE_DATA_ROOT = Path(__file__).parent / "language_data"
-LANGUAGE_SELECTION_PATH = Path(__file__).parent / "language_selection.json"
-PREFERENCES_PATH = Path(__file__).parent / "settings.json"
 logging.basicConfig(
     filename=LOG_PATH,
     level=logging.INFO,
@@ -80,67 +69,31 @@ logging.basicConfig(
 LOGGER = logging.getLogger(__name__)
 
 
-class WorkerSignals(QObject):
-    result = Signal(object)
-    error = Signal(str)
-    finished = Signal()
-
-
-class Worker(QRunnable):
-    def __init__(self, fn: Callable[[Callable[[], bool]], Any]) -> None:
-        super().__init__()
-        self.fn = fn
-        self.signals = WorkerSignals()
-        self._cancelled = threading.Event()
-
-    def cancel(self) -> None:
-        self._cancelled.set()
-
-    @Slot()
-    def run(self) -> None:
-        try:
-            result = self.fn(self._cancelled.is_set)
-            if not self._cancelled.is_set():
-                self.signals.result.emit(result)
-        except OperationCancelled:
-            LOGGER.info("Background operation cancelled")
-        except Exception as exc:  # Показываем пользователю понятное сообщение.
-            LOGGER.exception("Background operation failed")
-            self.signals.error.emit(str(exc) or type(exc).__name__)
-        finally:
-            self.signals.finished.emit()
-
-
 class MainWindow(QMainWindow):
-    def __init__(self) -> None:
+    def __init__(self, repository: SessionRepository | None = None) -> None:
         super().__init__()
         self.setWindowTitle(APP_TITLE)
         self.resize(1280, 760)
-        self.thread_pool = QThreadPool.globalInstance()
-        self._workers: set[Worker] = set()
-        self._foreground_worker: Worker | None = None
+        self.tasks = TaskManager(self)
         self._closing = False
         self._dirty = False
         self._loading_document = False
         self._hover_line_number: int | None = None
         self._audio_line_number: int | None = None
         self._replay_highlight_line: int | None = None
-        self._sequence_active = False
-        self._sequence_lines: list[tuple[int, str]] = []
-        self._sequence_index = 0
-        self._sequence_generation = 0
+        self.sequence = PlaybackSequence()
         self._switching_language = False
-        self.current_language = get_language(load_selected_language(LANGUAGE_SELECTION_PATH))
-        self.preferences = load_preferences(PREFERENCES_PATH)
+        self.repository = repository or SessionRepository(Path(__file__).parent)
+        self.preferences = self.repository.load_preferences()
+        self.language_controller = LanguageController(
+            self.repository.load_selected_language(), self.preferences.source_language_key
+        )
         self.current_source_path: Path | None = None
         self.audio_path: Path | None = None
         self.player = QMediaPlayer(self)
         self.audio_output = QAudioOutput(self)
         self.player.setAudioOutput(self.audio_output)
         self.audio_output.setVolume(0.9)
-        self.translator = GoogleTranslationProvider(
-            self.current_language.translation_code, self._source_language_code()
-        )
         self.speech = EdgeSpeechProvider(TTS_TIMEOUT_SECONDS)
 
         self.source_edit = QTextEdit()
@@ -180,10 +133,10 @@ class MainWindow(QMainWindow):
         self._build_ui()
         self._populate_languages()
         self._connect_signals()
-        self._ensure_language_directory()
+        self.repository.ensure_language_directory(self.current_language)
         cached_voices = self._load_cached_voices()
         self._populate_voices(cached_voices)
-        if self._voice_cache_path().exists():
+        if self.repository.voice_cache_path(self.current_language).exists():
             self.voice_status.setText(f"Загружено голосов из кэша: {len(cached_voices)}")
         else:
             self.voice_status.setText("Доступны встроенные голоса.")
@@ -191,10 +144,13 @@ class MainWindow(QMainWindow):
         self._restore_app_state()
         self._apply_editor_font_size()
 
-    def _source_language_code(self) -> str:
-        if self.preferences.source_language_key == "auto":
-            return "auto"
-        return get_language(self.preferences.source_language_key).translation_code
+    @property
+    def current_language(self):
+        return self.language_controller.profile
+
+    @property
+    def translator(self):
+        return self.language_controller.translator
 
     def _apply_editor_font_size(self) -> None:
         for editor in (self.source_edit, self.translation_edit, self.transcription_edit):
@@ -214,44 +170,9 @@ class MainWindow(QMainWindow):
         self.language_combo.setCurrentIndex(selected_index)
         self.language_combo.blockSignals(False)
 
-    def _language_directory(self, profile: LanguageProfile | None = None) -> Path:
-        return LANGUAGE_DATA_ROOT / (profile or self.current_language).key
-
-    def _state_path(self) -> Path:
-        return self._language_directory() / "app_state.json"
-
-    def _last_audio_path(self) -> Path:
-        return self._language_directory() / "last_audio.mp3"
-
-    def _voice_cache_path(self) -> Path:
-        return self._language_directory() / "voices_cache.json"
-
     def _language_export_path(self, selected: str, extension: str) -> Path:
         """Place a user-named export in the active language directory."""
-        extension = extension if extension.startswith(".") else f".{extension}"
-        selected_path = Path(selected)
-        stem = selected_path.stem if selected_path.suffix else selected_path.name
-        suffix = f"_{self.current_language.file_suffix}"
-        if not stem.lower().endswith(suffix.lower()):
-            stem += suffix
-        return self._language_directory() / f"{stem}{extension}"
-
-    def _ensure_language_directory(self) -> None:
-        try:
-            self._language_directory().mkdir(parents=True, exist_ok=True)
-        except OSError:
-            LOGGER.exception("Could not create language directory: %s", self.current_language.key)
-
-    @staticmethod
-    def _delete_temporary_audio(path: Path | None) -> None:
-        if not path:
-            return
-        try:
-            temp_root = Path(tempfile.gettempdir()).resolve()
-            if path.parent.resolve() == temp_root and path.name.startswith("gpt01_"):
-                path.unlink(missing_ok=True)
-        except OSError:
-            LOGGER.warning("Could not remove temporary audio: %s", path)
+        return self.repository.export_path(self.current_language, selected, extension)
 
     def _update_language_labels(self) -> None:
         self.translation_box.setTitle(f"Перевод — {self.current_language.label}")
@@ -264,7 +185,7 @@ class MainWindow(QMainWindow):
         if self._switching_language:
             return
         key = str(self.language_combo.currentData() or "")
-        profile = get_language(key)
+        profile = next((item for item in LANGUAGES if item.key == key), self.current_language)
         if profile.key == self.current_language.key:
             return
 
@@ -274,18 +195,15 @@ class MainWindow(QMainWindow):
             self._save_app_state()
             previous_audio = self.audio_path
             self.player.setSource(QUrl())
-            self._delete_temporary_audio(previous_audio)
+            self.repository.delete_temporary_audio(previous_audio)
             self.audio_path = None
 
-            self.current_language = profile
-            self.translator = GoogleTranslationProvider(
-                profile.translation_code, self._source_language_code()
-            )
-            self._ensure_language_directory()
+            self.language_controller.select_target(profile.key)
+            self.repository.ensure_language_directory(self.current_language)
             self._update_language_labels()
             self._populate_voices(self._load_cached_voices())
             self._restore_app_state()
-            save_selected_language(LANGUAGE_SELECTION_PATH, profile.key)
+            self.repository.save_selected_language(profile.key)
             self.voice_status.setText(f"Выбран язык: {profile.label}")
         except OSError as exc:
             LOGGER.exception("Could not switch language")
@@ -294,15 +212,7 @@ class MainWindow(QMainWindow):
             self._switching_language = False
 
     def _load_cached_voices(self) -> list[dict[str, Any]]:
-        cache_path = self._voice_cache_path()
-        if cache_path.exists():
-            try:
-                data = json.loads(cache_path.read_text(encoding="utf-8"))
-                if isinstance(data, list) and data:
-                    return data
-            except Exception:
-                pass
-        return list(self.current_language.fallback_voices)
+        return self.repository.load_voices(self.current_language)
 
     def _build_ui(self) -> None:
         toolbar = self.addToolBar("Команды")
@@ -430,12 +340,10 @@ class MainWindow(QMainWindow):
             source_language_key=str(source_combo.currentData()),
             editor_font_size=font_size.value(),
         )
-        self.translator = GoogleTranslationProvider(
-            self.current_language.translation_code, self._source_language_code()
-        )
+        self.language_controller.select_source(self.preferences.source_language_key)
         self._apply_editor_font_size()
         try:
-            save_preferences(PREFERENCES_PATH, self.preferences)
+            self.repository.save_preferences(self.preferences)
             self.statusBar().showMessage("Настройки сохранены.")
         except OSError as exc:
             self._show_error(f"Не удалось сохранить настройки: {exc}")
@@ -448,20 +356,11 @@ class MainWindow(QMainWindow):
         on_error: Callable[[str], None] | None = None,
     ) -> None:
         self._set_busy(True, busy_text)
-        worker = Worker(fn)
-        self._foreground_worker = worker
-        self._workers.add(worker)
-        worker.signals.result.connect(on_result)
-        worker.signals.error.connect(on_error or self._show_error)
 
         def _finished() -> None:
-            self._workers.discard(worker)
-            if self._foreground_worker is worker:
-                self._foreground_worker = None
             self._set_busy(False, "Готово")
 
-        worker.signals.finished.connect(_finished)
-        self.thread_pool.start(worker)
+        self.tasks.start(fn, on_result, on_error or self._show_error, _finished)
 
     def _set_busy(self, busy: bool, message: str) -> None:
         self.progress.setVisible(busy)
@@ -470,9 +369,9 @@ class MainWindow(QMainWindow):
         self.open_button.setEnabled(not busy)
         self.cancel_button.setEnabled(busy)
         playing = self.player.playbackState() == QMediaPlayer.PlaybackState.PlayingState
-        self.stop_button.setEnabled(busy or playing or self._sequence_active)
+        self.stop_button.setEnabled(busy or playing or self.sequence.active)
         self.replay_button.setEnabled(
-            not busy and not self._sequence_active and bool(self.source_edit.toPlainText().strip())
+            not busy and not self.sequence.active and bool(self.source_edit.toPlainText().strip())
         )
         self.statusBar().showMessage(message)
 
@@ -489,8 +388,7 @@ class MainWindow(QMainWindow):
             self.source_edit.setPlainText(document.original)
             self.translation_edit.setPlainText(document.translation)
             self.transcription_edit.setPlainText(
-                document.transcription
-                or transcribe(document.translation, self.current_language.transcription_mode)
+                document.transcription or self.language_controller.transcribe(document.translation)
             )
             self._loading_document = False
             self._dirty = False
@@ -520,17 +418,7 @@ class MainWindow(QMainWindow):
             voices = await asyncio.wait_for(
                 edge_tts.list_voices(), timeout=VOICE_LOAD_TIMEOUT_SECONDS
             )
-            filtered = sorted(
-                (
-                    v
-                    for v in voices
-                    if str(v.get("Locale", "")).startswith(profile.voice_prefix)
-                ),
-                key=lambda voice: (
-                    str(voice.get("Locale")),
-                    str(voice.get("ShortName")),
-                ),
-            )
+            filtered = self.language_controller.filter_voices(voices)
             return profile.key, filtered
 
         self.reload_voices_button.setEnabled(False)
@@ -538,18 +426,17 @@ class MainWindow(QMainWindow):
         self.voice_status.setText(
             f"Обновление списка голосов (не более {VOICE_LOAD_TIMEOUT_SECONDS} секунд)…"
         )
-        worker = Worker(lambda _cancelled: asyncio.run(fetch()))
-        self._workers.add(worker)
-        worker.signals.result.connect(self._voices_loaded)
-        worker.signals.error.connect(self._voices_load_failed)
-
         def _finished() -> None:
-            self._workers.discard(worker)
             self.reload_voices_button.setEnabled(True)
             self.language_combo.setEnabled(True)
 
-        worker.signals.finished.connect(_finished)
-        self.thread_pool.start(worker)
+        self.tasks.start(
+            lambda _cancelled: asyncio.run(fetch()),
+            self._voices_loaded,
+            self._voices_load_failed,
+            _finished,
+            foreground=False,
+        )
 
     def _voices_loaded(self, result: tuple[str, list[dict[str, Any]]]) -> None:
         language_key, voices = result
@@ -557,9 +444,7 @@ class MainWindow(QMainWindow):
             return
         if voices:
             try:
-                self._voice_cache_path().write_text(
-                    json.dumps(voices, ensure_ascii=False, indent=2), encoding="utf-8"
-                )
+                self.repository.save_voices(self.current_language, voices)
             except OSError:
                 pass
             self._populate_voices(voices)
@@ -694,7 +579,7 @@ class MainWindow(QMainWindow):
         self.replay_button.setEnabled(True)
         self.save_audio_button.setEnabled(True)
         if previous_audio and previous_audio != self.audio_path:
-            self._delete_temporary_audio(previous_audio)
+            self.repository.delete_temporary_audio(previous_audio)
 
     @Slot()
     def _on_voice_changed(self) -> None:
@@ -709,9 +594,7 @@ class MainWindow(QMainWindow):
     @Slot()
     def _on_translation_changed(self) -> None:
         self._on_text_changed()
-        transcription = transcribe(
-            self.translation_edit.toPlainText(), self.current_language.transcription_mode
-        )
+        transcription = self.language_controller.transcribe(self.translation_edit.toPlainText())
         self.transcription_edit.blockSignals(True)
         self.transcription_edit.setPlainText(transcription)
         self.transcription_edit.blockSignals(False)
@@ -795,16 +678,16 @@ class MainWindow(QMainWindow):
 
     @Slot()
     def cancel_operation(self) -> None:
-        if self._sequence_active:
+        if self.sequence.active:
             self.stop_current_operation()
             return
-        if self._foreground_worker:
-            self._foreground_worker.cancel()
+        if self.tasks.foreground:
+            self.tasks.cancel_foreground()
             self.statusBar().showMessage("Отмена операции…")
             self.cancel_button.setEnabled(False)
 
     def _reset_audio_state(self) -> None:
-        if self._sequence_active:
+        if self.sequence.active:
             self._stop_sequence()
         self.stop_audio()
         self._audio_line_number = None
@@ -813,7 +696,7 @@ class MainWindow(QMainWindow):
         if self.audio_path:
             old_path = self.audio_path
             self.audio_path = None
-            self._delete_temporary_audio(old_path)
+            self.repository.delete_temporary_audio(old_path)
         self.replay_button.setEnabled(bool(self.source_edit.toPlainText().strip()))
         self.save_audio_button.setEnabled(False)
         if not self.progress.isVisible():
@@ -826,8 +709,12 @@ class MainWindow(QMainWindow):
         self._start_sequence()
 
     def _start_sequence(self) -> None:
-        lines = numbered_nonempty_lines(self.source_edit.toPlainText())
-        if not lines:
+        rows = build_translation_rows(
+            self.source_edit.toPlainText(),
+            self.translation_edit.toPlainText(),
+            self.transcription_edit.toPlainText(),
+        )
+        if not rows:
             if self.audio_path and self.audio_path.exists():
                 self.player.setSource(QUrl.fromLocalFile(str(self.audio_path)))
                 self.player.setPosition(0)
@@ -841,30 +728,27 @@ class MainWindow(QMainWindow):
             return
 
         self._stop_sequence()
-        self._sequence_generation += 1
-        self._sequence_active = True
-        self._sequence_lines = lines
-        self._sequence_index = 0
+        generation = self.sequence.start(rows)
         self.replay_button.setEnabled(False)
         self.stop_button.setEnabled(True)
-        self._play_next_sequence_line(self._sequence_generation)
+        self._play_next_sequence_line(generation)
 
     def _play_next_sequence_line(self, generation: int) -> None:
-        if not self._sequence_active or generation != self._sequence_generation:
+        if not self.sequence.matches(generation):
             return
-        if self._sequence_index >= len(self._sequence_lines):
+        row = self.sequence.current
+        if row is None:
             self._finish_sequence()
             return
 
-        line_number, source_text = self._sequence_lines[self._sequence_index]
+        line_number = row.index
+        source_text = row.source
         self._replay_highlight_line = line_number
         self._render_source_highlights()
-        current = self._sequence_index + 1
-        total = len(self._sequence_lines)
+        current, total = self.sequence.progress
         self.statusBar().showMessage(f"Строка {current} из {total}: подготовка…")
 
-        translated_block = self.translation_edit.document().findBlockByNumber(line_number)
-        translated_text = translated_block.text().strip() if translated_block.isValid() else ""
+        translated_text = row.translation
         voice = self.selected_voice()
         if not voice:
             self._stop_sequence("Голос не выбран.")
@@ -880,7 +764,7 @@ class MainWindow(QMainWindow):
 
         def play_line(result: tuple[str, str, bool]) -> None:
             filename, target_text, translation_was_missing = result
-            if not self._sequence_active or generation != self._sequence_generation:
+            if not self.sequence.matches(generation):
                 Path(filename).unlink(missing_ok=True)
                 return
             if translation_was_missing:
@@ -888,7 +772,7 @@ class MainWindow(QMainWindow):
                 self._set_parallel_line(
                     self.transcription_edit,
                     line_number,
-                    transcribe(target_text, self.current_language.transcription_mode),
+                    self.language_controller.transcribe(target_text),
                 )
                 self._dirty = True
             self._audio_line_number = line_number
@@ -918,14 +802,16 @@ class MainWindow(QMainWindow):
         editor.blockSignals(False)
 
     def _media_status_changed(self, status: QMediaPlayer.MediaStatus) -> None:
-        if status != QMediaPlayer.MediaStatus.EndOfMedia or not self._sequence_active:
+        if status != QMediaPlayer.MediaStatus.EndOfMedia or not self.sequence.active:
             return
-        self._sequence_index += 1
-        self._play_next_sequence_line(self._sequence_generation)
+        generation = self.sequence.generation
+        if self.sequence.advance() is None:
+            self._finish_sequence()
+            return
+        self._play_next_sequence_line(generation)
 
     def _finish_sequence(self) -> None:
-        self._sequence_active = False
-        self._sequence_lines = []
+        self.sequence.complete()
         self._replay_highlight_line = None
         self._render_source_highlights()
         self.replay_button.setEnabled(True)
@@ -933,13 +819,10 @@ class MainWindow(QMainWindow):
         self.statusBar().showMessage("Последовательное озвучивание завершено.")
 
     def _stop_sequence(self, message: str | None = None) -> None:
-        was_active = self._sequence_active
-        self._sequence_active = False
-        self._sequence_generation += 1
-        self._sequence_lines = []
+        was_active = self.sequence.stop()
         self._replay_highlight_line = None
-        if self._foreground_worker:
-            self._foreground_worker.cancel()
+        if self.tasks.foreground:
+            self.tasks.cancel_foreground()
         self.player.stop()
         self.player.setSource(QUrl())
         self._render_source_highlights()
@@ -950,11 +833,11 @@ class MainWindow(QMainWindow):
 
     @Slot()
     def stop_current_operation(self) -> None:
-        if self._sequence_active:
+        if self.sequence.active:
             self._stop_sequence()
             return
-        if self._foreground_worker:
-            self._foreground_worker.cancel()
+        if self.tasks.foreground:
+            self.tasks.cancel_foreground()
         self.stop_audio()
         self.statusBar().showMessage("Операция остановлена.")
 
@@ -990,8 +873,8 @@ class MainWindow(QMainWindow):
     def _playback_changed(self, state: QMediaPlayer.PlaybackState) -> None:
         playing = state == QMediaPlayer.PlaybackState.PlayingState
         busy = self.progress.isVisible()
-        self.stop_button.setEnabled(playing or busy or self._sequence_active)
-        if not playing and not busy and not self._sequence_active:
+        self.stop_button.setEnabled(playing or busy or self.sequence.active)
+        if not playing and not busy and not self.sequence.active:
             self.statusBar().showMessage("Готово")
 
     @Slot()
@@ -1044,15 +927,8 @@ class MainWindow(QMainWindow):
         return answer == QMessageBox.StandardButton.Yes
 
     def _restore_app_state(self) -> None:
-        state_path = self._state_path()
-        load_path = state_path
-        if (
-            not state_path.exists()
-            and self.current_language.key == "Chine"
-            and LEGACY_STATE_PATH.exists()
-        ):
-            load_path = LEGACY_STATE_PATH
-        state = load_app_state(load_path)
+        restored = self.repository.load_session(self.current_language)
+        state = restored.state
         self._loading_document = True
         self.source_edit.setPlainText(state.original)
         self.translation_edit.setPlainText(state.translation)
@@ -1074,17 +950,13 @@ class MainWindow(QMainWindow):
                 self.restoreGeometry(QByteArray(encoded))
             except (ValueError, TypeError):
                 LOGGER.warning("Saved window geometry is invalid")
-        if state.current_source_path:
-            self.current_source_path = Path(state.current_source_path)
-        if state.audio_file:
-            restored_audio = load_path.parent / state.audio_file
-            if restored_audio.is_file():
-                self.audio_path = restored_audio
-                self.player.setSource(QUrl.fromLocalFile(str(restored_audio)))
-                self.save_audio_button.setEnabled(True)
-        elif load_path == LEGACY_STATE_PATH and LEGACY_AUDIO_PATH.is_file():
-            self.audio_path = LEGACY_AUDIO_PATH
-            self.player.setSource(QUrl.fromLocalFile(str(LEGACY_AUDIO_PATH)))
+        self.current_source_path = (
+            Path(state.current_source_path) if state.current_source_path else None
+        )
+        self.audio_path = restored.audio_path
+        self.save_audio_button.setEnabled(bool(self.audio_path))
+        if self.audio_path:
+            self.player.setSource(QUrl.fromLocalFile(str(self.audio_path)))
             self.save_audio_button.setEnabled(True)
         self.replay_button.setEnabled(
             bool(self.source_edit.toPlainText().strip())
@@ -1092,17 +964,6 @@ class MainWindow(QMainWindow):
         )
 
     def _save_app_state(self) -> None:
-        state_path = self._state_path()
-        last_audio_path = self._last_audio_path()
-        audio_file = ""
-        if self.audio_path and self.audio_path.is_file():
-            try:
-                if self.audio_path.resolve() != last_audio_path.resolve():
-                    shutil.copyfile(self.audio_path, last_audio_path)
-                audio_file = last_audio_path.name
-            except OSError:
-                LOGGER.exception("Could not preserve the last audio file")
-
         geometry = base64.b64encode(bytes(self.saveGeometry())).decode("ascii")
         state = AppState(
             original=self.source_edit.toPlainText(),
@@ -1114,10 +975,9 @@ class MainWindow(QMainWindow):
             window_geometry=geometry,
             volume=self.audio_output.volume(),
             current_source_path=str(self.current_source_path or ""),
-            audio_file=audio_file,
         )
         try:
-            save_app_state(state_path, state)
+            self.repository.save_session(self.current_language, state, self.audio_path)
         except OSError:
             LOGGER.exception("Could not save application state")
 
@@ -1126,13 +986,12 @@ class MainWindow(QMainWindow):
             event.ignore()
             return
         self._closing = True
-        for worker in tuple(self._workers):
-            worker.cancel()
+        self.tasks.cancel_all()
         self.player.stop()
         self._save_app_state()
         self.player.setSource(QUrl())
         if self.audio_path:
-            self._delete_temporary_audio(self.audio_path)
+            self.repository.delete_temporary_audio(self.audio_path)
         event.accept()
 
 
