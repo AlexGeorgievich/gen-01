@@ -54,6 +54,10 @@ from gpt01.services import EdgeSpeechProvider
 from gpt01.session import SessionRepository
 from gpt01.state import AppState
 from gpt01.storage import load_document, save_document
+from gpt01.structured_translation import (
+    StructuredTranslationResult,
+    translate_preserving_layout,
+)
 from gpt01.tasks import TaskManager
 
 APP_TITLE = "Многоязычный переводчик + Microsoft TTS"
@@ -400,15 +404,21 @@ class MainWindow(QMainWindow):
 
     @Slot()
     def translate_text(self) -> None:
-        text = self.source_edit.toPlainText().strip()
-        if not text:
+        text = self.source_edit.toPlainText()
+        if not text.strip():
             QMessageBox.information(self, APP_TITLE, "Введите исходный текст.")
             return
 
-        def translate(cancelled: Callable[[], bool]) -> str:
-            return self.translator.translate(text, cancelled)
+        def translate(cancelled: Callable[[], bool]) -> StructuredTranslationResult:
+            return translate_preserving_layout(text, self.translator, cancelled)
 
-        self._run_task(translate, self._set_translation, "Перевод…")
+        self._run_task(translate, self._set_structured_translation, "Перевод по абзацам…")
+
+    def _set_structured_translation(self, result: StructuredTranslationResult) -> None:
+        self._set_translation(result.text)
+        self.statusBar().showMessage(
+            f"Переведено строк: {result.translated_lines}; частей: {result.translated_chunks}."
+        )
 
     @Slot()
     def load_voices(self) -> None:
