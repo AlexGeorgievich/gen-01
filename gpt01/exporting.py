@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 import shutil
 from dataclasses import dataclass
 from enum import StrEnum
@@ -8,6 +9,8 @@ from pathlib import Path
 from .errors import StorageError
 from .models import Document
 from .storage import ORIGINAL_MARKER, TRANSLATION_MARKER, serialize_document
+
+_SENTENCE_END = re.compile(r"[.!?…。！？][\"'»”\)\]]*\s*$")
 
 
 class ExportKind(StrEnum):
@@ -67,15 +70,27 @@ def render_columns(
     columns = [lines(text) for _header, text in definitions]
     row_count = max((len(column) for column in columns), default=0)
     blocks: list[str] = []
-    for start in range(0, row_count, block_size):
-        rows = ["\t".join(headers)]
-        for row_index in range(start, min(start + block_size, row_count)):
+    start = 0
+    while start < row_count:
+        end = min(start + block_size, row_count)
+        while end < row_count:
+            boundary_cells = [
+                column[end - 1] if end - 1 < len(column) else "" for column in columns
+            ]
+            boundary_text = next((cell.strip() for cell in boundary_cells if cell.strip()), "")
+            if not boundary_text or _SENTENCE_END.search(boundary_text):
+                break
+            end += 1
+
+        rows = ["\t".join(headers)] if not blocks else []
+        for row_index in range(start, end):
             cells = [
                 column[row_index].replace("\t", "    ") if row_index < len(column) else ""
                 for column in columns
             ]
             rows.append("\t".join(cells))
         blocks.append("\n".join(rows))
+        start = end
     return "\n\n".join(blocks) + "\n" if blocks else "\t".join(headers) + "\n"
 
 

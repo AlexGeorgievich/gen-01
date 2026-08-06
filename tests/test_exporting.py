@@ -64,14 +64,26 @@ def test_three_column_export_has_titles_and_synchronised_rows():
     ]
 
 
-def test_three_column_export_repeats_titles_every_ten_rows():
-    values = "\n".join(f"line {index}" for index in range(21))
+def test_three_column_export_has_one_title_and_breaks_after_ten_complete_sentences():
+    values = "\n".join(f"line {index}." for index in range(21))
 
     rendered = render_three_columns(Document(values, values, values))
 
-    assert rendered.count("Исходный текст\tПеревод\tТранскрипция") == 3
-    assert "line 9\tline 9\tline 9\n\nИсходный текст" in rendered
-    assert "line 19\tline 19\tline 19\n\nИсходный текст" in rendered
+    assert rendered.count("Исходный текст\tПеревод\tТранскрипция") == 1
+    assert "line 9.\tline 9.\tline 9.\n\nline 10." in rendered
+    assert "line 19.\tline 19.\tline 19.\n\nline 20." in rendered
+
+
+def test_column_break_moves_to_end_of_sentence():
+    lines = [f"Sentence {index}." for index in range(9)]
+    lines.extend(["Long sentence", "continues", "ends here.", "Next sentence."])
+    values = "\n".join(lines)
+
+    rendered = render_three_columns(Document(values, values, values))
+
+    assert "Long sentence\tLong sentence\tLong sentence\n\n" not in rendered
+    assert "continues\tcontinues\tcontinues\n\n" not in rendered
+    assert "ends here.\tends here.\tends here.\n\nNext sentence." in rendered
 
 
 def test_three_column_export_preserves_missing_parallel_lines():
@@ -100,12 +112,12 @@ def test_learning_kit_supports_three_column_layout(tmp_path):
 
 
 def test_translation_only_supports_column_layout_and_ten_row_blocks():
-    values = "\n".join(f"translation {index}" for index in range(11))
+    values = "\n".join(f"translation {index}." for index in range(11))
 
     rendered = render_columns(Document(translation=values), ExportKind.TRANSLATION)
 
-    assert rendered.count("Перевод") == 2
-    assert "translation 9\n\nПеревод\ntranslation 10" in rendered
+    assert rendered.count("Перевод") == 1
+    assert "translation 9.\n\ntranslation 10." in rendered
     assert "Исходный текст" not in rendered
 
 
