@@ -87,6 +87,25 @@ def test_marker_button_uses_last_line_pointed_to_by_mouse(qapp, tmp_path):
     window.close()
 
 
+def test_marker_button_uses_blinking_text_cursor_without_mouse_move(qapp, tmp_path):
+    window = MainWindow(SessionRepository(tmp_path))
+    window.source_edit.setPlainText("zero\none\ntwo\nthree")
+    window._last_source_pointer_line = None
+    block = window.source_edit.document().findBlockByNumber(3)
+    cursor = window.source_edit.textCursor()
+    cursor.setPosition(block.position())
+
+    window.source_edit.setTextCursor(cursor)
+    qapp.processEvents()
+    window.mark_b_button.click()
+
+    assert window._range_b_line == 3
+    assert window.mark_b_button.text() == "B:4"
+
+    window._dirty = False
+    window.close()
+
+
 def test_source_change_resets_markers_and_space_repeat(qapp, tmp_path):
     window = MainWindow(SessionRepository(tmp_path))
     window.source_edit.setPlainText("one\ntwo")

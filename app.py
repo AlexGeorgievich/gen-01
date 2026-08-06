@@ -428,6 +428,7 @@ class MainWindow(QMainWindow):
         self.voice_combo.currentIndexChanged.connect(self._on_voice_changed)
         self.translation_edit.textChanged.connect(self._on_translation_changed)
         self.source_edit.textChanged.connect(self._on_source_text_changed)
+        self.source_edit.cursorPositionChanged.connect(self._on_source_cursor_changed)
         self.transcription_edit.textChanged.connect(self._on_text_changed)
         self.line_shortcut = QShortcut(QKeySequence("Ctrl+Space"), self)
         self.line_shortcut.activated.connect(self.speak_line_at_cursor)
@@ -955,6 +956,12 @@ class MainWindow(QMainWindow):
         self._on_text_changed()
 
     @Slot()
+    def _on_source_cursor_changed(self) -> None:
+        cursor = self.source_edit.textCursor()
+        if cursor.block().isValid():
+            self._last_source_pointer_line = cursor.blockNumber()
+
+    @Slot()
     def _on_translation_changed(self) -> None:
         self._on_text_changed()
         transcription = self.language_controller.transcribe(self.translation_edit.toPlainText())
@@ -1040,7 +1047,7 @@ class MainWindow(QMainWindow):
         )
         if block is None or not block.isValid():
             self.statusBar().showMessage(
-                f"Наведите указатель на строку исходного текста перед установкой {marker}."
+                f"Установите курсор на строку исходного текста перед меткой {marker}."
             )
             return
         if marker == "A":
