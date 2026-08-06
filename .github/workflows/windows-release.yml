@@ -1,0 +1,75 @@
+name: Checks and Windows release
+
+on:
+  push:
+    branches:
+      - main
+      - refactor/modular-architecture
+    tags:
+      - "v*"
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  checks:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+      - name: Install dependencies
+        run: python -m pip install -r requirements-dev.txt
+      - name: Lint
+        run: python -m ruff check .
+      - name: Test
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: python -m pytest -q
+
+  windows-release:
+    if: github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/v')
+    needs: checks
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+      - name: Install dependencies
+        run: python -m pip install -r requirements-dev.txt
+      - name: Generate Windows icon
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: python tools/generate_icon.py
+      - name: Build application
+        run: python -m PyInstaller --clean --noconfirm GPT01.spec
+      - name: Add documentation
+        shell: pwsh
+        run: |
+          Copy-Item LICENSE dist\GPT01\LICENSE
+          Copy-Item README.md dist\GPT01\README.md
+      - name: Smoke-test packaged application
+        shell: pwsh
+        run: |
+          $process = Start-Process `
+            -FilePath dist\GPT01\GPT01.exe `
+            -ArgumentList "--smoke-test" `
+            -PassThru -Wait -WindowStyle Hidden
+          if ($process.ExitCode -ne 0) {
+            throw "GPT01 smoke test failed with exit code $($process.ExitCode)"
+          }
+      - name: Create ZIP archive
+        shell: pwsh
+        run: Compress-Archive -Path dist\GPT01 -DestinationPath GPT01-windows-x64.zip
+      - uses: actions/upload-artifact@v4
+        with:
+          name: GPT01-windows-x64
+          path: GPT01-windows-x64.zip
+          if-no-files-found: error
+

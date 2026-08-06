@@ -18,5 +18,6 @@ language_data/
 dist/
 build/
 *.spec
+!GPT01.spec
 /SAP-*.txt
 /var-*.txt

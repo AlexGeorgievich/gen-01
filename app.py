@@ -16,6 +16,7 @@ from PySide6.QtGui import (
     QCloseEvent,
     QColor,
     QCursor,
+    QIcon,
     QKeySequence,
     QShortcut,
     QTextFormat,
@@ -70,8 +71,15 @@ from gpt01.structured_translation import (
 )
 from gpt01.tasks import TaskManager
 from gpt01.tts import TtsSettings
+from gpt01.version import (
+    APP_AUTHOR,
+    APP_DISPLAY_NAME,
+    APP_NAME,
+    APP_ORGANIZATION,
+    __version__,
+)
 
-APP_TITLE = "Многоязычный переводчик + Microsoft TTS"
+APP_TITLE = APP_DISPLAY_NAME
 VOICE_LOAD_TIMEOUT_SECONDS = 15
 TTS_TIMEOUT_SECONDS = 90
 OPEN_FILTER = (
@@ -86,6 +94,8 @@ APPLICATION_ROOT = (
     if getattr(sys, "frozen", False)
     else Path(__file__).resolve().parent
 )
+BUNDLE_ROOT = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent))
+APP_ICON_PATH = BUNDLE_ROOT / "assets" / "gpt01.svg"
 try:
     USER_DATA_ROOT = user_data_root()
     USER_DATA_ROOT.mkdir(parents=True, exist_ok=True)
@@ -104,6 +114,8 @@ class MainWindow(QMainWindow):
     def __init__(self, repository: SessionRepository | None = None) -> None:
         super().__init__()
         self.setWindowTitle(APP_TITLE)
+        if APP_ICON_PATH.is_file():
+            self.setWindowIcon(QIcon(str(APP_ICON_PATH)))
         self.resize(1280, 760)
         self.tasks = TaskManager(self)
         self._closing = False
@@ -1761,8 +1773,31 @@ class MainWindow(QMainWindow):
 
 def main() -> int:
     app = QApplication(sys.argv)
-    app.setApplicationName(APP_TITLE)
+    app.setApplicationName(APP_NAME)
+    app.setApplicationDisplayName(APP_DISPLAY_NAME)
+    app.setApplicationVersion(__version__)
+    app.setOrganizationName(APP_ORGANIZATION)
+    app.setDesktopFileName(APP_AUTHOR + "." + APP_NAME)
+    if APP_ICON_PATH.is_file():
+        app.setWindowIcon(QIcon(str(APP_ICON_PATH)))
+    if "--smoke-test" in sys.argv:
+        from gpt01.transcription import to_ipa, to_pinyin, to_romaji
+
+        transcription_checks = (
+            (to_ipa("hello", "en-us"), "hello"),
+            (to_ipa("bonjour", "fr-fr"), "bonjour"),
+            (to_ipa("hola", "es-es"), "hola"),
+            (to_pinyin("你好"), "你好"),
+            (to_romaji("日本"), "日本"),
+        )
+        if any(not result or result == source for result, source in transcription_checks):
+            raise RuntimeError("Не загружены данные транскрипции дистрибутива")
     window = MainWindow()
+    if "--smoke-test" in sys.argv:
+        window.tasks.cancel_all()
+        window.player.stop()
+        window.ab_audio_cache.clear()
+        return 0
     window.show()
     return app.exec()
 
