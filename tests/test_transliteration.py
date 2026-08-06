@@ -1,4 +1,5 @@
-from gpt01.transcription import to_pinyin, to_romaji, transcribe
+import gpt01.transcription as transcription
+from gpt01.transcription import to_ipa, to_pinyin, to_romaji, transcribe
 
 
 def test_empty_text():
@@ -24,8 +25,28 @@ def test_japanese_text_is_converted_to_romaji():
     assert result.isascii()
 
 
-def test_latin_transcription_keeps_french_text():
-    assert transcribe("Bonjour le monde", "latin") == "Bonjour le monde"
+def test_english_uses_broad_ipa():
+    assert transcribe("table", "ipa_en") == "/ˈteɪbəl/"
+
+
+def test_french_uses_broad_ipa():
+    assert transcribe("bonjour table", "ipa_fr") == "/bɔ̃ʒuʁ tabl/"
+
+
+def test_spanish_uses_broad_ipa_with_stress():
+    assert transcribe("mesa gracias", "ipa_es") == "/ˈmesa ˈgɾaθʝas/"
+
+
+def test_ipa_preserves_line_breaks():
+    result = to_ipa("table\n\nworld", "en-us")
+    assert result.split("\n") == ["/ˈteɪbəl/", "", "/ˈwɚld/"]
+
+
+def test_ipa_falls_back_to_original_line_without_dictionary(monkeypatch):
+    monkeypatch.setattr(transcription, "gruut", None)
+    transcription._phonemize_line.cache_clear()
+
+    assert to_ipa("Unavailable dictionary", "en-us") == "Unavailable dictionary"
 
 
 def test_transcription_dispatches_pinyin():

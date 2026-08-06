@@ -37,6 +37,14 @@ def test_language_profiles_have_expected_file_suffixes():
     }
 
 
+def test_european_languages_use_ipa_profiles():
+    assert {profile.key: profile.transcription_mode for profile in LANGUAGES[:3]} == {
+        "English": "ipa_en",
+        "French": "ipa_fr",
+        "Spanish": "ipa_es",
+    }
+
+
 def test_unknown_language_falls_back_to_chine():
     assert get_language("unknown").key == DEFAULT_LANGUAGE_KEY
 

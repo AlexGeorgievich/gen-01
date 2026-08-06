@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
 
-TranscriptionMode = Literal["latin", "romaji", "pinyin"]
+TranscriptionMode = Literal["ipa_en", "ipa_fr", "ipa_es", "romaji", "pinyin"]
 
 
 @dataclass(frozen=True, slots=True)
@@ -27,7 +27,7 @@ LANGUAGES: tuple[LanguageProfile, ...] = (
         translation_code="en",
         file_suffix="en",
         voice_prefix="en-",
-        transcription_mode="latin",
+        transcription_mode="ipa_en",
         default_voice="en-US-AriaNeural",
         fallback_voices=(
             {"ShortName": "en-US-AriaNeural", "Locale": "en-US", "Gender": "Female"},
@@ -42,7 +42,7 @@ LANGUAGES: tuple[LanguageProfile, ...] = (
         translation_code="fr",
         file_suffix="fr",
         voice_prefix="fr-",
-        transcription_mode="latin",
+        transcription_mode="ipa_fr",
         default_voice="fr-FR-DeniseNeural",
         fallback_voices=(
             {"ShortName": "fr-FR-DeniseNeural", "Locale": "fr-FR", "Gender": "Female"},
@@ -55,7 +55,7 @@ LANGUAGES: tuple[LanguageProfile, ...] = (
         translation_code="es",
         file_suffix="es",
         voice_prefix="es-",
-        transcription_mode="latin",
+        transcription_mode="ipa_es",
         default_voice="es-ES-ElviraNeural",
         fallback_voices=(
             {"ShortName": "es-ES-ElviraNeural", "Locale": "es-ES", "Gender": "Female"},

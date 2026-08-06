@@ -236,7 +236,13 @@ class MainWindow(QMainWindow):
 
     def _update_language_labels(self) -> None:
         self.translation_title.setText(f"Перевод — {self.current_language.label}")
-        mode_names = {"pinyin": "пиньинь", "romaji": "ромадзи", "latin": "латиница"}
+        mode_names = {
+            "pinyin": "пиньинь",
+            "romaji": "ромадзи",
+            "ipa_en": "IPA (English)",
+            "ipa_fr": "IPA (French)",
+            "ipa_es": "IPA (Spanish)",
+        }
         mode_name = mode_names[self.current_language.transcription_mode]
         self.transcription_title.setText(f"Транскрипция — {mode_name}")
 

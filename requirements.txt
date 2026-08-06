@@ -3,3 +3,7 @@ edge-tts>=7.2,<8
 deep-translator>=1.11,<2
 pypinyin>=0.54,<1
 pykakasi>=2.3,<3
+gruut>=2.4,<3
+gruut-lang-en>=2,<3
+gruut-lang-fr>=2,<3
+gruut-lang-es>=2,<3
