@@ -109,7 +109,6 @@ class MainWindow(QMainWindow):
         self._dirty = False
         self._loading_document = False
         self._hover_line_number: int | None = None
-        self._last_source_pointer_line: int | None = None
         self._audio_line_number: int | None = None
         self._replay_highlight_line: int | None = None
         self._range_a_line: int | None = None
@@ -428,7 +427,6 @@ class MainWindow(QMainWindow):
         self.voice_combo.currentIndexChanged.connect(self._on_voice_changed)
         self.translation_edit.textChanged.connect(self._on_translation_changed)
         self.source_edit.textChanged.connect(self._on_source_text_changed)
-        self.source_edit.cursorPositionChanged.connect(self._on_source_cursor_changed)
         self.transcription_edit.textChanged.connect(self._on_text_changed)
         self.line_shortcut = QShortcut(QKeySequence("Ctrl+Space"), self)
         self.line_shortcut.activated.connect(self.speak_line_at_cursor)
@@ -956,12 +954,6 @@ class MainWindow(QMainWindow):
         self._on_text_changed()
 
     @Slot()
-    def _on_source_cursor_changed(self) -> None:
-        cursor = self.source_edit.textCursor()
-        if cursor.block().isValid():
-            self._last_source_pointer_line = cursor.blockNumber()
-
-    @Slot()
     def _on_translation_changed(self) -> None:
         self._on_text_changed()
         transcription = self.language_controller.transcribe(self.translation_edit.toPlainText())
@@ -1039,17 +1031,14 @@ class MainWindow(QMainWindow):
         self._set_range_marker("B")
 
     def _set_range_marker(self, marker: str) -> None:
-        line_number = self._last_source_pointer_line
-        block = (
-            self.source_edit.document().findBlockByNumber(line_number)
-            if line_number is not None
-            else None
-        )
-        if block is None or not block.isValid():
+        cursor = self.source_edit.textCursor()
+        block = cursor.block()
+        if not block.isValid():
             self.statusBar().showMessage(
                 f"Установите курсор на строку исходного текста перед меткой {marker}."
             )
             return
+        line_number = block.blockNumber()
         if marker == "A":
             self._range_a_line = line_number
             self.mark_a_button.setText(f"A:{line_number + 1}")
@@ -1064,7 +1053,6 @@ class MainWindow(QMainWindow):
     def _reset_range_markers(self) -> None:
         self._range_a_line = None
         self._range_b_line = None
-        self._last_source_pointer_line = None
         self._ab_repeat_ready = False
         self.mark_a_button.setText("A")
         self.mark_b_button.setText("B")
@@ -1092,7 +1080,6 @@ class MainWindow(QMainWindow):
                 position = event.position().toPoint()  # type: ignore[attr-defined]
                 cursor = self.source_edit.cursorForPosition(position)
                 self._hover_line_number = cursor.blockNumber()
-                self._last_source_pointer_line = self._hover_line_number
                 self._render_source_highlights()
             elif event.type() == QEvent.Type.Leave:
                 self._hover_line_number = None

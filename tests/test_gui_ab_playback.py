@@ -16,6 +16,13 @@ def qapp():
     return QApplication.instance() or QApplication([])
 
 
+def set_caret_line(window, line_number):
+    block = window.source_edit.document().findBlockByNumber(line_number)
+    cursor = window.source_edit.textCursor()
+    cursor.setPosition(block.position())
+    window.source_edit.setTextCursor(cursor)
+
+
 def test_markers_select_reversed_inclusive_range_and_enable_space_repeat(
     qapp,
     tmp_path,
@@ -23,9 +30,9 @@ def test_markers_select_reversed_inclusive_range_and_enable_space_repeat(
     window = MainWindow(SessionRepository(tmp_path))
     window.source_edit.setPlainText("zero\none\n\nthree\nfour")
     window.translation_edit.setPlainText("0\n1\n\n3\n4")
-    window._last_source_pointer_line = 4
+    set_caret_line(window, 4)
     window.set_range_marker_a()
-    window._last_source_pointer_line = 1
+    set_caret_line(window, 1)
     window.set_range_marker_b()
 
     assert window.mark_a_button.text() == "A:5"
@@ -67,16 +74,20 @@ def test_markers_select_reversed_inclusive_range_and_enable_space_repeat(
     window.close()
 
 
-def test_marker_button_uses_last_line_pointed_to_by_mouse(qapp, tmp_path):
+def test_mouse_path_to_button_does_not_replace_blinking_caret_line(qapp, tmp_path):
     window = MainWindow(SessionRepository(tmp_path))
     window.source_edit.setPlainText("zero\none\ntwo\nthree")
     window.show()
     qapp.processEvents()
-    block = window.source_edit.document().findBlockByNumber(2)
-    cursor = window.source_edit.textCursor()
-    cursor.setPosition(block.position())
+    set_caret_line(window, 2)
+    first_block = window.source_edit.document().findBlockByNumber(0)
+    first_cursor = window.source_edit.textCursor()
+    first_cursor.setPosition(first_block.position())
 
-    QTest.mouseMove(window.source_edit.viewport(), window.source_edit.cursorRect(cursor).center())
+    QTest.mouseMove(
+        window.source_edit.viewport(),
+        window.source_edit.cursorRect(first_cursor).center(),
+    )
     qapp.processEvents()
     window.mark_a_button.click()
 
@@ -90,12 +101,8 @@ def test_marker_button_uses_last_line_pointed_to_by_mouse(qapp, tmp_path):
 def test_marker_button_uses_blinking_text_cursor_without_mouse_move(qapp, tmp_path):
     window = MainWindow(SessionRepository(tmp_path))
     window.source_edit.setPlainText("zero\none\ntwo\nthree")
-    window._last_source_pointer_line = None
-    block = window.source_edit.document().findBlockByNumber(3)
-    cursor = window.source_edit.textCursor()
-    cursor.setPosition(block.position())
 
-    window.source_edit.setTextCursor(cursor)
+    set_caret_line(window, 3)
     qapp.processEvents()
     window.mark_b_button.click()
 
@@ -109,9 +116,9 @@ def test_marker_button_uses_blinking_text_cursor_without_mouse_move(qapp, tmp_pa
 def test_source_change_resets_markers_and_space_repeat(qapp, tmp_path):
     window = MainWindow(SessionRepository(tmp_path))
     window.source_edit.setPlainText("one\ntwo")
-    window._last_source_pointer_line = 0
+    set_caret_line(window, 0)
     window.set_range_marker_a()
-    window._last_source_pointer_line = 1
+    set_caret_line(window, 1)
     window.set_range_marker_b()
     window._ab_repeat_ready = True
     window._update_ab_controls()
