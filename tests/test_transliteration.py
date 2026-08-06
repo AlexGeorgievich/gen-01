@@ -45,6 +45,10 @@ def test_russian_ipa_preserves_line_positions_and_iotation():
     assert transcribe("Яблоко\n\nРоссия", "ipa_ru") == "/jabloko/\n\n/rossʲija/"
 
 
+def test_japanese_standalone_numerals_use_preferred_counting_readings():
+    assert transcribe("四\n七\n三百\n八千", "romaji") == "yon\nnana\nsanbyaku\nhassen"
+
+
 def test_ipa_preserves_line_breaks():
     result = to_ipa("table\n\nworld", "en-us")
     assert result.split("\n") == ["/ˈteɪbəl/", "", "/ˈwɚld/"]

@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+from .asian_numerals import AsianNumeralProcessor, AsianNumeralTranslationProvider
 from .french_grammar import (
     FrenchArticleMode,
     FrenchGrammarProcessor,
@@ -29,6 +30,11 @@ class LanguageController:
             french_article_mode,
             french_lexicon_path,
         )
+        self.asian_numeral_processor = (
+            AsianNumeralProcessor(self.profile.key)
+            if self.profile.key in {"Chine", "Japan"}
+            else None
+        )
         self.translator = self._build_translator()
 
     @property
@@ -39,6 +45,11 @@ class LanguageController:
 
     def select_target(self, key: str) -> LanguageProfile:
         self.profile = get_language(key)
+        self.asian_numeral_processor = (
+            AsianNumeralProcessor(self.profile.key)
+            if self.profile.key in {"Chine", "Japan"}
+            else None
+        )
         self.translator = self._build_translator()
         return self.profile
 
@@ -51,12 +62,19 @@ class LanguageController:
         self.translator = self._build_translator()
 
     def prepare_translation(self, source: str, translated: str) -> str:
-        if self.profile.key != "French":
-            return translated
-        return self.french_processor.process(source, translated)
+        if self.profile.key == "French":
+            return self.french_processor.process(source, translated)
+        if self.asian_numeral_processor:
+            return self.asian_numeral_processor.process(source, translated)
+        return translated
 
     def transcribe(self, text: str) -> str:
         return transcribe(text, self.profile.transcription_mode)
+
+    def prepare_speech(self, text: str) -> str:
+        if self.asian_numeral_processor:
+            return self.asian_numeral_processor.prepare_speech(text)
+        return text
 
     def filter_voices(self, voices: list[dict[str, Any]]) -> list[dict[str, Any]]:
         return sorted(
@@ -75,4 +93,9 @@ class LanguageController:
         )
         if self.profile.key == "French":
             return FrenchTranslationProvider(provider, self.french_processor)
+        if self.asian_numeral_processor:
+            return AsianNumeralTranslationProvider(
+                provider,
+                self.asian_numeral_processor,
+            )
         return provider

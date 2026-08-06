@@ -58,3 +58,18 @@ def test_controller_does_not_apply_french_rules_to_other_languages():
     controller = LanguageController("Spanish", french_article_mode="definite")
 
     assert controller.prepare_translation("стол", "tableau") == "tableau"
+
+
+def test_controller_normalizes_standalone_asian_numerals():
+    controller = LanguageController("Japan", "Russian")
+
+    assert controller.prepare_translation("один\nдвадцать", "1つ\n20") == "一\n二十"
+    assert controller.prepare_speech("四\n七") == "よん\nなな"
+    controller.select_target("Chine")
+    assert controller.prepare_translation("сто один", "101") == "一百零一"
+
+
+def test_controller_keeps_contextual_asian_numbers_unchanged():
+    controller = LanguageController("Chine", "Russian")
+
+    assert controller.prepare_translation("у меня две книги", "我有两本书") == "我有两本书"

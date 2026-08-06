@@ -777,6 +777,7 @@ class MainWindow(QMainWindow):
             QMessageBox.information(self, APP_TITLE, "Выберите голос.")
             return
         tts_settings = self.tts_settings
+        speech_text = self.language_controller.prepare_speech(text)
         self.stop_audio()
         self._audio_line_number = None
         self._replay_highlight_line = None
@@ -787,7 +788,7 @@ class MainWindow(QMainWindow):
 
         def synthesize(cancelled: Callable[[], bool]) -> str:
             self.speech.synthesize(
-                text,
+                speech_text,
                 voice,
                 output,
                 cancelled,
@@ -852,7 +853,7 @@ class MainWindow(QMainWindow):
             output = Path(filename)
 
             self.speech.synthesize(
-                target_text,
+                self.language_controller.prepare_speech(target_text),
                 voice,
                 output,
                 cancelled,
@@ -1150,7 +1151,7 @@ class MainWindow(QMainWindow):
             os.close(fd)
             output = Path(filename)
             self.speech.synthesize(
-                target_text,
+                self.language_controller.prepare_speech(target_text),
                 voice,
                 output,
                 cancelled,

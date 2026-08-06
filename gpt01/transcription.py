@@ -13,6 +13,7 @@ try:
 except ImportError:  # Приложение остаётся работоспособным без опциональных словарей.
     gruut = None
 
+from .asian_numerals import japanese_cardinal_romaji
 from .languages import TranscriptionMode
 
 LOGGER = logging.getLogger(__name__)
@@ -81,6 +82,10 @@ def to_romaji(text: str) -> str:
     converter = kakasi()
     lines: list[str] = []
     for line in text.split("\n"):
+        numeral_reading = japanese_cardinal_romaji(line)
+        if numeral_reading is not None:
+            lines.append(numeral_reading)
+            continue
         parts = converter.convert(line)
         lines.append(" ".join(str(part["hepburn"]) for part in parts))
     return "\n".join(lines)
