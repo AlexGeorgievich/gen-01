@@ -20,6 +20,46 @@ _IPA_LANGUAGES = {"ipa_en": "en-us", "ipa_fr": "fr-fr", "ipa_es": "es-es"}
 _IPA_VOWEL = re.compile(r"[aeiouyæɑɒɔɛəɚɝɜɞɪʊʌøœɐɨʉɯɤɶɵɘ]", re.IGNORECASE)
 _WRITTEN_VOWEL_GROUP = re.compile(r"[aeiouáéíóúü]+", re.IGNORECASE)
 _GRUUT_LOCK = threading.RLock()
+_RUSSIAN_LETTERS = frozenset("абвгдеёжзийклмнопрстуфхцчшщъыьэюя")
+_RUSSIAN_VOWELS = frozenset("аеёиоуыэюя")
+_RUSSIAN_PALATALIZING = frozenset("еёиюяь")
+_RUSSIAN_ALWAYS_HARD = frozenset("жшц")
+_RUSSIAN_CONSONANTS = {
+    "б": "b",
+    "в": "v",
+    "г": "ɡ",
+    "д": "d",
+    "ж": "ʐ",
+    "з": "z",
+    "й": "j",
+    "к": "k",
+    "л": "l",
+    "м": "m",
+    "н": "n",
+    "п": "p",
+    "р": "r",
+    "с": "s",
+    "т": "t",
+    "ф": "f",
+    "х": "x",
+    "ц": "ts",
+    "ч": "tɕ",
+    "ш": "ʂ",
+    "щ": "ɕː",
+}
+_RUSSIAN_VOWEL_IPA = {
+    "а": "a",
+    "е": "e",
+    "ё": "o",
+    "и": "i",
+    "о": "o",
+    "у": "u",
+    "ы": "ɨ",
+    "э": "e",
+    "ю": "u",
+    "я": "a",
+}
+_RUSSIAN_IOTATED = frozenset("еёюя")
 
 
 def to_pinyin(text: str) -> str:
@@ -130,11 +170,45 @@ def to_ipa(text: str, language: str) -> str:
     return "\n".join(output)
 
 
+def to_russian_ipa(text: str) -> str:
+    """Create a broad phonemic IPA rendering of Russian Cyrillic text."""
+    output: list[str] = []
+    for line in text.split("\n"):
+        if not line.strip():
+            output.append("")
+            continue
+        rendered: list[str] = []
+        for index, character in enumerate(line):
+            letter = character.casefold()
+            if letter in _RUSSIAN_CONSONANTS:
+                phone = _RUSSIAN_CONSONANTS[letter]
+                next_letter = line[index + 1].casefold() if index + 1 < len(line) else ""
+                if next_letter in _RUSSIAN_PALATALIZING and letter not in _RUSSIAN_ALWAYS_HARD:
+                    phone += "ʲ"
+                rendered.append(phone)
+                continue
+            if letter in _RUSSIAN_VOWEL_IPA:
+                previous = line[index - 1].casefold() if index else ""
+                if letter in _RUSSIAN_IOTATED and (
+                    not previous or previous in _RUSSIAN_VOWELS or previous in "ьъ"
+                    or previous not in _RUSSIAN_LETTERS
+                ):
+                    rendered.append("j")
+                rendered.append(_RUSSIAN_VOWEL_IPA[letter])
+                continue
+            if letter not in "ьъ":
+                rendered.append(character)
+        output.append(f"/{''.join(rendered).strip()}/")
+    return "\n".join(output)
+
+
 def transcribe(text: str, mode: TranscriptionMode) -> str:
     if mode == "pinyin":
         return to_pinyin(text)
     if mode == "romaji":
         return to_romaji(text)
+    if mode == "ipa_ru":
+        return to_russian_ipa(text)
     if mode in _IPA_LANGUAGES:
         return to_ipa(text, _IPA_LANGUAGES[mode])
     return text

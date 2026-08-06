@@ -37,6 +37,14 @@ def test_spanish_uses_broad_ipa_with_stress():
     assert transcribe("mesa gracias", "ipa_es") == "/ˈmesa ˈgɾaθʝas/"
 
 
+def test_russian_uses_broad_phonemic_ipa():
+    assert transcribe("Привет, мир!", "ipa_ru") == "/prʲivʲet, mʲir!/"
+
+
+def test_russian_ipa_preserves_line_positions_and_iotation():
+    assert transcribe("Яблоко\n\nРоссия", "ipa_ru") == "/jabloko/\n\n/rossʲija/"
+
+
 def test_ipa_preserves_line_breaks():
     result = to_ipa("table\n\nworld", "en-us")
     assert result.split("\n") == ["/ˈteɪbəl/", "", "/ˈwɚld/"]

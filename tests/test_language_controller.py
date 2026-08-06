@@ -28,6 +28,19 @@ def test_controller_filters_target_voices():
     assert controller.filter_voices(voices) == [voices[0]]
 
 
+def test_controller_configures_russian_translation_voice_and_transcription():
+    controller = LanguageController("Chine")
+    controller.select_target("Russian")
+    voices = [
+        {"Locale": "ru-RU", "ShortName": "ru-RU-SvetlanaNeural"},
+        {"Locale": "en-US", "ShortName": "en-US-AriaNeural"},
+    ]
+
+    assert controller.translator.target_language == "ru"
+    assert controller.filter_voices(voices) == [voices[0]]
+    assert controller.transcribe("Привет") == "/prʲivʲet/"
+
+
 def test_controller_transcribes_for_current_profile():
     controller = LanguageController("Chine")
     assert controller.transcribe("你好") == "nǐ hǎo"

@@ -12,6 +12,7 @@ def test_required_language_profiles_exist():
         "English",
         "French",
         "Spanish",
+        "Russian",
         "Japan",
         "Chine",
     }
@@ -22,6 +23,7 @@ def test_language_profiles_have_distinct_translation_targets():
         "en",
         "fr",
         "es",
+        "ru",
         "ja",
         "zh-CN",
     }
@@ -32,16 +34,33 @@ def test_language_profiles_have_expected_file_suffixes():
         "English": "en",
         "French": "fr",
         "Spanish": "es",
+        "Russian": "ru",
         "Japan": "jp",
         "Chine": "zh",
     }
 
 
 def test_european_languages_use_ipa_profiles():
-    assert {profile.key: profile.transcription_mode for profile in LANGUAGES[:3]} == {
+    european = {"English", "French", "Spanish", "Russian"}
+    assert {
+        profile.key: profile.transcription_mode
+        for profile in LANGUAGES
+        if profile.key in european
+    } == {
         "English": "ipa_en",
         "French": "ipa_fr",
         "Spanish": "ipa_es",
+        "Russian": "ipa_ru",
+    }
+
+
+def test_russian_profile_uses_russian_edge_voices():
+    profile = get_language("Russian")
+
+    assert profile.default_voice == "ru-RU-SvetlanaNeural"
+    assert {voice["ShortName"] for voice in profile.fallback_voices} == {
+        "ru-RU-SvetlanaNeural",
+        "ru-RU-DmitryNeural",
     }
 
 

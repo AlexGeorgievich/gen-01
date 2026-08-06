@@ -251,6 +251,7 @@ class MainWindow(QMainWindow):
             "ipa_en": "IPA (English)",
             "ipa_fr": "IPA (French)",
             "ipa_es": "IPA (Spanish)",
+            "ipa_ru": "IPA (Russian)",
         }
         mode_name = mode_names[self.current_language.transcription_mode]
         self.transcription_title.setText(f"Транскрипция — {mode_name}")

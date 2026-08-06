@@ -25,6 +25,14 @@ def test_export_path_adds_language_suffix(tmp_path):
     assert target == tmp_path / "language_data" / "Japan" / "lesson_jp.txt"
 
 
+def test_russian_export_uses_isolated_directory_and_suffix(tmp_path):
+    repository = SessionRepository(tmp_path)
+
+    target = repository.export_path(get_language("Russian"), "lesson.txt", ".txt")
+
+    assert target == tmp_path / "language_data" / "Russian" / "lesson_ru.txt"
+
+
 def test_export_path_does_not_duplicate_suffix(tmp_path):
     repository = SessionRepository(tmp_path)
     target = repository.export_path(get_language("English"), "lesson_en.txt", ".txt")
