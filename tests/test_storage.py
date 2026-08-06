@@ -3,7 +3,7 @@ import zipfile
 import pytest
 
 from gpt01.errors import StorageError
-from gpt01.models import Document
+from gpt01.models import Document, SubtitleCue
 from gpt01.storage import (
     LEGACY_TRANSLATION_MARKER,
     ORIGINAL_MARKER,
@@ -13,7 +13,9 @@ from gpt01.storage import (
     load_document,
     parse_document,
     parse_srt,
+    save_document,
     serialize_document,
+    serialize_srt,
 )
 
 
@@ -63,12 +65,76 @@ def test_parse_srt_keeps_one_text_line_per_cue():
         "2\r\n00:00:04,000 --> 00:00:06,000\r\nSecond\r\nline"
     )
 
-    assert parse_srt(text) == Document("Hello world\nSecond line")
+    document = parse_srt(text)
+
+    assert document.original == "Hello world\nSecond line"
+    assert document.subtitles == (
+        SubtitleCue(
+            "1",
+            "00:00:01,000 --> 00:00:03,000",
+            ("<i>Hello</i> world",),
+            "Hello world",
+        ),
+        SubtitleCue(
+            "2",
+            "00:00:04,000 --> 00:00:06,000",
+            ("Second", "line"),
+            "Second line",
+        ),
+    )
+
+
+def test_srt_round_trip_preserves_indices_timings_settings_and_outer_markup():
+    source = (
+        "7\n00:00:01,250 --> 00:00:03,500 position:50% align:middle\n"
+        "<i>Hello\nworld</i>\n\n"
+        "9\n00:00:04.000 --> 00:00:06.000\nSecond cue"
+    )
+    document = parse_srt(source)
+    document.translation = "Bonjour le monde\nDeuxième réplique"
+
+    rendered = serialize_srt(document)
+
+    assert rendered == (
+        "7\n00:00:01,250 --> 00:00:03,500 position:50% align:middle\n"
+        "<i>Bonjour le monde</i>\n\n"
+        "9\n00:00:04.000 --> 00:00:06.000\nDeuxième réplique\n"
+    )
+
+
+def test_srt_export_rejects_translation_with_different_cue_count():
+    document = parse_srt(
+        "1\n00:00:01,000 --> 00:00:02,000\nOne\n\n"
+        "2\n00:00:03,000 --> 00:00:04,000\nTwo"
+    )
+    document.translation = "Une seule ligne"
+
+    with pytest.raises(StorageError, match="Количество строк перевода"):
+        serialize_srt(document)
+
+
+def test_save_document_uses_srt_format_for_srt_extension(tmp_path):
+    path = tmp_path / "lesson_fr.srt"
+    document = parse_srt("1\n00:00:01,000 --> 00:00:02,000\nHello")
+    document.translation = "Bonjour"
+
+    save_document(path, document)
+
+    assert path.read_text(encoding="utf-8") == (
+        "1\n00:00:01,000 --> 00:00:02,000\nBonjour\n"
+    )
 
 
 def test_invalid_srt_raises_storage_error():
     with pytest.raises(StorageError, match="не содержит"):
         parse_srt("not subtitles")
+
+
+def test_srt_parser_accepts_long_hour_values_and_missing_numeric_index():
+    document = parse_srt("125:00:01,000 --> 126:00:02,000\nLong subtitle")
+
+    assert document.subtitles[0].index == "1"
+    assert document.subtitles[0].timing == "125:00:01,000 --> 126:00:02,000"
 
 
 def test_load_docx_extracts_paragraphs(tmp_path):

@@ -49,6 +49,31 @@ def test_batch_translates_multiple_formats_and_reports_progress(tmp_path):
     assert updates[-1][:2] == (2, 2)
 
 
+def test_batch_preserves_srt_timings_and_exports_srt(tmp_path):
+    source = tmp_path / "captions.srt"
+    source.write_text(
+        "1\n00:00:01,000 --> 00:00:02,000\nOne\n\n"
+        "2\n00:00:03,000 --> 00:00:04,000 position:10%\nTwo",
+        encoding="utf-8",
+    )
+    processor = BatchProcessor(
+        SessionRepository(tmp_path),
+        get_language("Spanish"),
+        PrefixTranslator(),
+    )
+
+    result = processor.process([source])
+
+    output = result.succeeded[0].output
+    assert output.name == "captions_es.srt"
+    rendered = output.read_text(encoding="utf-8")
+    assert "00:00:01,000 --> 00:00:02,000" in rendered
+    assert "00:00:03,000 --> 00:00:04,000 position:10%" in rendered
+    assert "translated:One" in rendered
+    assert "translated:Two" in rendered
+    assert "=== ОРИГИНАЛ ===" not in rendered
+
+
 def test_batch_does_not_overwrite_existing_export(tmp_path):
     source = tmp_path / "lesson.txt"
     source.write_text("one", encoding="utf-8")

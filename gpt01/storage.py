@@ -5,7 +5,7 @@ from pathlib import Path
 from xml.etree import ElementTree
 
 from .errors import StorageError
-from .models import Document
+from .models import Document, SubtitleCue
 
 ORIGINAL_MARKER = "=== ОРИГИНАЛ ==="
 TRANSLATION_MARKER = "=== ПЕРЕВОД ==="
@@ -15,10 +15,14 @@ LEGACY_TRANSCRIPTION_MARKER = "=== ПИНЬИНЬ ==="
 MAX_DOCX_XML_SIZE = 10 * 1024 * 1024
 WORD_NAMESPACE = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
 _SRT_TIMING = re.compile(
-    r"^\s*\d{1,2}:\d{2}:\d{2}[,.]\d{3}\s*-->\s*"
-    r"\d{1,2}:\d{2}:\d{2}[,.]\d{3}(?:\s+.*)?$"
+    r"^\s*\d+:\d{2}:\d{2}[,.]\d{3}\s*-->\s*"
+    r"\d+:\d{2}:\d{2}[,.]\d{3}(?:\s+.*)?$"
 )
 _SRT_TAG = re.compile(r"<[^>]+>")
+_SRT_OUTER_MARKUP = re.compile(
+    r"^(?P<opening>(?:<(?!/)[^>]+>)+)(?P<body>.*?)(?P<closing>(?:</[^>]+>)+)$"
+)
+_SRT_TAG_NAME = re.compile(r"</?\s*([A-Za-z][\w:-]*)")
 
 
 def decode_text(raw: bytes) -> str:
@@ -66,23 +70,70 @@ def parse_srt(text: str) -> Document:
     normalized = text.replace("\r\n", "\n").replace("\r", "\n").strip()
     if not normalized:
         return Document()
-    cues: list[str] = []
-    for block in re.split(r"\n\s*\n", normalized):
-        lines = [line.strip() for line in block.splitlines()]
+    cues: list[SubtitleCue] = []
+    for cue_number, block in enumerate(re.split(r"\n\s*\n", normalized), start=1):
+        lines = block.splitlines()
         timing_index = next(
-            (index for index, line in enumerate(lines) if _SRT_TIMING.match(line)),
+            (index for index, line in enumerate(lines) if _SRT_TIMING.match(line.strip())),
             None,
         )
         if timing_index is None:
             continue
-        cue_lines = [line for line in lines[timing_index + 1 :] if line]
+        cue_lines = tuple(line.strip() for line in lines[timing_index + 1 :] if line.strip())
         if cue_lines:
             cue = html.unescape(_SRT_TAG.sub("", " ".join(cue_lines))).strip()
             if cue:
-                cues.append(cue)
+                index = next(
+                    (line.strip() for line in lines[:timing_index] if line.strip()),
+                    str(cue_number),
+                )
+                cues.append(
+                    SubtitleCue(
+                        index=index,
+                        timing=lines[timing_index].strip(),
+                        source_lines=cue_lines,
+                        text=cue,
+                    )
+                )
     if not cues:
         raise StorageError("SRT-файл не содержит распознаваемых субтитров.")
-    return Document(original="\n".join(cues))
+    return Document(
+        original="\n".join(cue.text for cue in cues),
+        subtitles=tuple(cues),
+    )
+
+
+def _outer_srt_markup(lines: tuple[str, ...]) -> tuple[str, str]:
+    value = " ".join(lines).strip()
+    match = _SRT_OUTER_MARKUP.fullmatch(value)
+    if not match:
+        return "", ""
+    opening = match.group("opening")
+    closing = match.group("closing")
+    opening_names = _SRT_TAG_NAME.findall(opening)
+    closing_names = _SRT_TAG_NAME.findall(closing)
+    if opening_names != list(reversed(closing_names)):
+        return "", ""
+    return opening, closing
+
+
+def serialize_srt(document: Document) -> str:
+    if not document.subtitles:
+        raise StorageError("Нет исходных тайм-кодов SRT для сохранения.")
+    translated = document.translation or document.original
+    translated_lines = translated.replace("\r\n", "\n").replace("\r", "\n").split("\n")
+    if len(translated_lines) != len(document.subtitles):
+        raise StorageError(
+            "Количество строк перевода не совпадает с количеством реплик SRT: "
+            f"{len(translated_lines)} вместо {len(document.subtitles)}."
+        )
+
+    blocks: list[str] = []
+    for cue, translated_line in zip(document.subtitles, translated_lines, strict=True):
+        opening, closing = _outer_srt_markup(cue.source_lines)
+        rendered_text = f"{opening}{translated_line.strip()}{closing}"
+        blocks.append(f"{cue.index}\n{cue.timing}\n{rendered_text}")
+    return "\n\n".join(blocks) + "\n"
 
 
 def load_docx(path: Path) -> Document:
@@ -130,6 +181,11 @@ def load_document(path: Path) -> Document:
 
 def save_document(path: Path, document: Document) -> None:
     try:
-        path.write_text(serialize_document(document), encoding="utf-8", newline="\n")
+        rendered = (
+            serialize_srt(document)
+            if path.suffix.lower() == ".srt"
+            else serialize_document(document)
+        )
+        path.write_text(rendered, encoding="utf-8", newline="\n")
     except OSError as exc:
         raise StorageError(f"Не удалось сохранить файл: {exc}") from exc

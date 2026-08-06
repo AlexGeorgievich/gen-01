@@ -55,14 +55,14 @@ from gpt01.exporting import (
 from gpt01.french_grammar import FrenchArticleMode
 from gpt01.language_controller import LanguageController
 from gpt01.languages import LANGUAGES
-from gpt01.models import Document
+from gpt01.models import Document, SubtitleCue
 from gpt01.playback import PlaybackSequence
 from gpt01.preferences import Preferences
 from gpt01.rows import build_translation_rows
 from gpt01.services import EdgeSpeechProvider
 from gpt01.session import SessionRepository
 from gpt01.state import AppState
-from gpt01.storage import load_document
+from gpt01.storage import load_document, save_document
 from gpt01.structured_translation import (
     StructuredTranslationResult,
     translate_preserving_layout,
@@ -79,6 +79,7 @@ OPEN_FILTER = (
     "Субтитры SubRip (*.srt);;Все файлы (*.*)"
 )
 TEXT_FILTER = "Текстовые файлы (*.txt);;Все файлы (*.*)"
+SRT_FILTER = "Субтитры SubRip (*.srt);;Все файлы (*.*)"
 LOG_PATH = Path(__file__).parent / "gpt01.log"
 logging.basicConfig(
     filename=LOG_PATH,
@@ -111,6 +112,7 @@ class MainWindow(QMainWindow):
             self.repository.french_lexicon_path(),
         )
         self.current_source_path: Path | None = None
+        self.subtitle_cues: tuple[SubtitleCue, ...] = ()
         self.audio_path: Path | None = None
         self.player = QMediaPlayer(self)
         self.audio_output = QAudioOutput(self)
@@ -583,6 +585,7 @@ class MainWindow(QMainWindow):
             self.transcription_edit.setPlainText(
                 document.transcription or self.language_controller.transcribe(document.translation)
             )
+            self.subtitle_cues = document.subtitles
             self._loading_document = False
             self._dirty = False
             self.current_source_path = Path(filename)
@@ -1257,6 +1260,9 @@ class MainWindow(QMainWindow):
         if not original and not translation and not transcription:
             QMessageBox.information(self, APP_TITLE, "Нет текста для сохранения.")
             return
+        if self.subtitle_cues:
+            self._save_subtitle_file(original, translation, transcription)
+            return
         export_selection = self._select_export_kind()
         if export_selection is None:
             return
@@ -1298,6 +1304,46 @@ class MainWindow(QMainWindow):
             if result.audio_path:
                 message += f"; {result.audio_path.name}"
             self.statusBar().showMessage(message)
+        except AppError as exc:
+            self._show_error(str(exc))
+
+    def _save_subtitle_file(
+        self,
+        original: str,
+        translation: str,
+        transcription: str,
+    ) -> None:
+        if not translation.strip():
+            QMessageBox.information(
+                self,
+                APP_TITLE,
+                "Сначала выполните перевод субтитров.",
+            )
+            return
+        suggested_stem = self.current_source_path.stem if self.current_source_path else "субтитры"
+        suggested = self._export_dialog_path(suggested_stem, ".srt")
+        filename, _ = QFileDialog.getSaveFileName(
+            self,
+            "Сохранить переведённые субтитры",
+            str(suggested),
+            SRT_FILTER,
+        )
+        if not filename:
+            return
+        target = self._language_export_path(filename, ".srt")
+        try:
+            save_document(
+                target,
+                Document(
+                    original,
+                    translation,
+                    transcription,
+                    self.subtitle_cues,
+                ),
+            )
+            self._remember_directory("last_export_directory", target.parent)
+            self._dirty = False
+            self.statusBar().showMessage(f"Субтитры сохранены: {target}")
         except AppError as exc:
             self._show_error(str(exc))
 
@@ -1385,6 +1431,7 @@ class MainWindow(QMainWindow):
         self.current_source_path = (
             Path(state.current_source_path) if state.current_source_path else None
         )
+        self.subtitle_cues = self._restore_subtitle_cues(self.current_source_path)
         self.audio_path = restored.audio_path
         self.save_audio_button.setEnabled(bool(self.audio_path))
         if self.audio_path:
@@ -1394,6 +1441,16 @@ class MainWindow(QMainWindow):
             bool(self.source_edit.toPlainText().strip())
             or bool(self.audio_path and self.audio_path.exists())
         )
+
+    @staticmethod
+    def _restore_subtitle_cues(path: Path | None) -> tuple[SubtitleCue, ...]:
+        if not path or path.suffix.lower() != ".srt" or not path.is_file():
+            return ()
+        try:
+            return load_document(path).subtitles
+        except AppError:
+            LOGGER.warning("Could not restore SRT timing template: %s", path)
+            return ()
 
     def _save_app_state(self) -> None:
         geometry = base64.b64encode(bytes(self.saveGeometry())).decode("ascii")

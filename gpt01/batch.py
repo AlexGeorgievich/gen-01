@@ -41,7 +41,7 @@ class BatchResult:
 
 
 class BatchProcessor:
-    """Translate multiple source documents into unique language-specific TXT files."""
+    """Translate multiple source documents into language-specific output files."""
 
     def __init__(
         self,
@@ -80,8 +80,17 @@ class BatchProcessor:
                     cancelled,
                 ).text
                 transcription = transcribe(translated, self.profile.transcription_mode)
-                output = self._unique_output(source.stem, reserved_outputs)
-                save_document(output, Document(document.original, translated, transcription))
+                extension = ".srt" if document.subtitles else ".txt"
+                output = self._unique_output(source.stem, extension, reserved_outputs)
+                save_document(
+                    output,
+                    Document(
+                        document.original,
+                        translated,
+                        transcription,
+                        document.subtitles,
+                    ),
+                )
                 reserved_outputs.add(str(output.resolve()).casefold())
                 results.append(BatchItemResult(source=source, output=output))
             except OperationCancelled:
@@ -93,8 +102,8 @@ class BatchProcessor:
 
         return BatchResult(tuple(results))
 
-    def _unique_output(self, stem: str, reserved: set[str]) -> Path:
-        candidate = self.repository.export_path(self.profile, stem, ".txt")
+    def _unique_output(self, stem: str, extension: str, reserved: set[str]) -> Path:
+        candidate = self.repository.export_path(self.profile, stem, extension)
         counter = 2
         while candidate.exists() or str(candidate.resolve()).casefold() in reserved:
             candidate = candidate.with_name(f"{candidate.stem}_{counter}{candidate.suffix}")
