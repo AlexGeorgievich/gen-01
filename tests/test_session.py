@@ -11,6 +11,14 @@ def test_language_paths_are_isolated(tmp_path):
     )
 
 
+def test_french_lexicon_has_language_specific_external_path(tmp_path):
+    repository = SessionRepository(tmp_path)
+
+    assert repository.french_lexicon_path() == (
+        tmp_path / "language_data" / "French" / "lexicon.json"
+    )
+
+
 def test_export_path_adds_language_suffix(tmp_path):
     repository = SessionRepository(tmp_path)
     target = repository.export_path(get_language("Japan"), "lesson.txt", ".txt")

@@ -31,3 +31,17 @@ def test_controller_filters_target_voices():
 def test_controller_transcribes_for_current_profile():
     controller = LanguageController("Chine")
     assert controller.transcribe("你好") == "nǐ hǎo"
+
+
+def test_controller_prepares_french_translation_with_selected_article_mode():
+    controller = LanguageController("French", french_article_mode="definite")
+
+    assert controller.prepare_translation("стол", "tableau") == "la table"
+    controller.set_french_article_mode("off")
+    assert controller.prepare_translation("стол", "tableau") == "tableau"
+
+
+def test_controller_does_not_apply_french_rules_to_other_languages():
+    controller = LanguageController("Spanish", french_article_mode="definite")
+
+    assert controller.prepare_translation("стол", "tableau") == "tableau"

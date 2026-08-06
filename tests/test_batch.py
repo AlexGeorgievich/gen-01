@@ -2,6 +2,7 @@ import pytest
 
 from gpt01.batch import BatchProcessor
 from gpt01.errors import OperationCancelled
+from gpt01.french_grammar import FrenchGrammarProcessor, FrenchTranslationProvider
 from gpt01.languages import get_language
 from gpt01.session import SessionRepository
 from gpt01.storage import load_document
@@ -10,6 +11,14 @@ from gpt01.storage import load_document
 class PrefixTranslator:
     def translate(self, text, cancelled=None):
         return "\n".join(f"translated:{line}" for line in text.splitlines())
+
+
+class TableauTranslator:
+    target_language = "fr"
+    source_language = "ru"
+
+    def translate(self, text, cancelled=None):
+        return "tableau"
 
 
 def test_batch_translates_multiple_formats_and_reports_progress(tmp_path):
@@ -92,3 +101,23 @@ def test_batch_honours_cancellation_between_files(tmp_path):
         )
 
     assert len(list((tmp_path / "language_data" / "English").glob("*.txt"))) == 1
+
+
+def test_french_batch_uses_article_aware_translation(tmp_path):
+    source = tmp_path / "lesson.txt"
+    source.write_text("стол", encoding="utf-8")
+    translator = FrenchTranslationProvider(
+        TableauTranslator(),
+        FrenchGrammarProcessor("definite"),
+    )
+    processor = BatchProcessor(
+        SessionRepository(tmp_path),
+        get_language("French"),
+        translator,
+    )
+
+    result = processor.process([source])
+
+    document = load_document(result.succeeded[0].output)
+    assert document.translation == "la table"
+    assert document.transcription

@@ -53,6 +53,9 @@ class SessionRepository:
     def voice_cache_path(self, profile: LanguageProfile) -> Path:
         return self.language_directory(profile) / "voices_cache.json"
 
+    def french_lexicon_path(self) -> Path:
+        return self.data_root / "French" / "lexicon.json"
+
     def load_selected_language(self) -> str:
         return load_selected_language(self.selection_path)
 

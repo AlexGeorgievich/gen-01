@@ -5,6 +5,7 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
 
+from .french_grammar import FrenchArticleMode
 from .languages import LANGUAGE_BY_KEY
 
 
@@ -12,6 +13,7 @@ from .languages import LANGUAGE_BY_KEY
 class Preferences:
     source_language_key: str = "auto"
     editor_font_size: int = 11
+    french_article_mode: str = FrenchArticleMode.AUTO.value
     last_open_directory: str = ""
     last_export_directory: str = ""
 
@@ -26,9 +28,13 @@ class Preferences:
             font_size = 11
         last_open_directory = data.get("last_open_directory", "")
         last_export_directory = data.get("last_export_directory", "")
+        french_article_mode = FrenchArticleMode.parse(
+            data.get("french_article_mode", FrenchArticleMode.AUTO.value)
+        )
         return cls(
             source_language_key=source,
             editor_font_size=min(32, max(8, font_size)),
+            french_article_mode=french_article_mode.value,
             last_open_directory=(
                 last_open_directory.strip() if isinstance(last_open_directory, str) else ""
             ),

@@ -52,6 +52,7 @@ from gpt01.exporting import (
     ExportLayout,
     export_document,
 )
+from gpt01.french_grammar import FrenchArticleMode
 from gpt01.language_controller import LanguageController
 from gpt01.languages import LANGUAGES
 from gpt01.models import Document
@@ -104,7 +105,10 @@ class MainWindow(QMainWindow):
         self.repository = repository or SessionRepository(Path(__file__).parent)
         self.preferences = self.repository.load_preferences()
         self.language_controller = LanguageController(
-            self.repository.load_selected_language(), self.preferences.source_language_key
+            self.repository.load_selected_language(),
+            self.preferences.source_language_key,
+            self.preferences.french_article_mode,
+            self.repository.french_lexicon_path(),
         )
         self.current_source_path: Path | None = None
         self.audio_path: Path | None = None
@@ -418,6 +422,17 @@ class MainWindow(QMainWindow):
         font_size.setSuffix(" pt")
         font_size.setValue(self.preferences.editor_font_size)
 
+        french_articles = QComboBox(dialog)
+        french_articles.addItem("Автоматически (учебная форма)", FrenchArticleMode.AUTO.value)
+        french_articles.addItem("Определённые: le, la, l’, les", FrenchArticleMode.DEFINITE.value)
+        french_articles.addItem(
+            "Неопределённые: un, une, des",
+            FrenchArticleMode.INDEFINITE.value,
+        )
+        french_articles.addItem("Не добавлять", FrenchArticleMode.OFF.value)
+        article_index = french_articles.findData(self.preferences.french_article_mode)
+        french_articles.setCurrentIndex(max(0, article_index))
+
         speech_rate = QSpinBox(dialog)
         speech_rate.setRange(-100, 100)
         speech_rate.setSuffix(" %")
@@ -435,6 +450,7 @@ class MainWindow(QMainWindow):
 
         form.addRow("Базовый язык первого окна:", source_combo)
         form.addRow("Размер шрифта текстовых окон:", font_size)
+        form.addRow("Французские артикли:", french_articles)
         form.addRow("Скорость TTS:", speech_rate)
         form.addRow("Высота тона TTS:", speech_pitch)
         form.addRow("Громкость синтеза TTS:", speech_volume)
@@ -449,9 +465,11 @@ class MainWindow(QMainWindow):
 
         if dialog.exec() != QDialog.DialogCode.Accepted:
             return
+        previous_article_mode = self.preferences.french_article_mode
         self.preferences = Preferences(
             source_language_key=str(source_combo.currentData()),
             editor_font_size=font_size.value(),
+            french_article_mode=str(french_articles.currentData()),
             last_open_directory=self.preferences.last_open_directory,
             last_export_directory=self.preferences.last_export_directory,
         )
@@ -460,9 +478,12 @@ class MainWindow(QMainWindow):
         )
         tts_changed = updated_tts_settings != self.tts_settings
         self.tts_settings = updated_tts_settings
+        self.language_controller.set_french_article_mode(
+            self.preferences.french_article_mode
+        )
         self.language_controller.select_source(self.preferences.source_language_key)
         self._apply_editor_font_size()
-        if tts_changed:
+        if tts_changed or previous_article_mode != self.preferences.french_article_mode:
             self._reset_audio_state()
         try:
             self.repository.save_preferences(self.preferences)
@@ -733,7 +754,15 @@ class MainWindow(QMainWindow):
 
     @Slot()
     def speak_text(self) -> None:
-        text = self.translation_edit.toPlainText().strip()
+        source_text = self.source_edit.toPlainText()
+        current_translation = self.translation_edit.toPlainText()
+        prepared_translation = self.language_controller.prepare_translation(
+            source_text,
+            current_translation,
+        )
+        if prepared_translation != current_translation:
+            self._set_translation(prepared_translation)
+        text = prepared_translation.strip()
         voice = self.selected_voice()
         if not text:
             QMessageBox.information(
@@ -774,14 +803,20 @@ class MainWindow(QMainWindow):
         if self.source_edit.viewport().rect().contains(mouse_pos_src):
             cursor = self.source_edit.cursorForPosition(mouse_pos_src)
             line_text = cursor.block().text().strip()
+            source_line_text = line_text
             needs_translation = True
         elif self.translation_edit.viewport().rect().contains(mouse_pos_trans):
             cursor = self.translation_edit.cursorForPosition(mouse_pos_trans)
             line_text = cursor.block().text().strip()
+            source_cursor = self.source_edit.document().findBlockByNumber(
+                cursor.blockNumber()
+            )
+            source_line_text = source_cursor.text().strip() if source_cursor.isValid() else ""
             needs_translation = False
         else:
             cursor = self.source_edit.textCursor()
             line_text = cursor.block().text().strip()
+            source_line_text = line_text
             needs_translation = True
 
         line_number = cursor.blockNumber()
@@ -802,6 +837,11 @@ class MainWindow(QMainWindow):
             target_text = line_text
             if needs_translation:
                 target_text = self.translator.translate(line_text, cancelled)
+            else:
+                target_text = self.language_controller.prepare_translation(
+                    source_line_text,
+                    target_text,
+                )
 
             fd, filename = tempfile.mkstemp(prefix="gpt01_line_tts_", suffix=".mp3")
             os.close(fd)
@@ -818,6 +858,24 @@ class MainWindow(QMainWindow):
 
         def on_ready(result: tuple[str, str]) -> None:
             filename, translated_line = result
+            translation_cursor = self.translation_edit.document().findBlockByNumber(
+                line_number
+            )
+            existing_translation = (
+                translation_cursor.text() if translation_cursor.isValid() else ""
+            )
+            if translated_line != existing_translation:
+                self._set_parallel_line(
+                    self.translation_edit,
+                    line_number,
+                    translated_line,
+                )
+                self._set_parallel_line(
+                    self.transcription_edit,
+                    line_number,
+                    self.language_controller.transcribe(translated_line),
+                )
+                self._dirty = True
             self._audio_line_number = line_number
             self._replay_highlight_line = line_number
             self._render_source_highlights()
@@ -1059,6 +1117,10 @@ class MainWindow(QMainWindow):
 
         def prepare_line(cancelled: Callable[[], bool]) -> tuple[str, str, bool]:
             target_text = translated_text or self.translator.translate(source_text, cancelled)
+            target_text = self.language_controller.prepare_translation(
+                source_text,
+                target_text,
+            )
             fd, filename = tempfile.mkstemp(prefix="gpt01_sequence_tts_", suffix=".mp3")
             os.close(fd)
             output = Path(filename)
@@ -1069,14 +1131,14 @@ class MainWindow(QMainWindow):
                 cancelled,
                 settings=tts_settings,
             )
-            return str(output), target_text, not bool(translated_text)
+            return str(output), target_text, target_text != translated_text
 
         def play_line(result: tuple[str, str, bool]) -> None:
-            filename, target_text, translation_was_missing = result
+            filename, target_text, translation_changed = result
             if not self.sequence.matches(generation):
                 Path(filename).unlink(missing_ok=True)
                 return
-            if translation_was_missing:
+            if translation_changed:
                 self._set_parallel_line(self.translation_edit, line_number, target_text)
                 self._set_parallel_line(
                     self.transcription_edit,
