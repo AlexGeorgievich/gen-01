@@ -1,4 +1,5 @@
 import json
+from pathlib import Path
 
 import pytest
 
@@ -6,6 +7,29 @@ from gpt01.french_grammar import (
     FrenchArticleMode,
     FrenchGrammarProcessor,
     FrenchTranslationProvider,
+)
+
+RUSSIAN_ARTICLE_CASES = (
+    ("дерево", "arbre", "l’arbre", "un arbre"),
+    ("офис", "bureau", "le bureau", "un bureau"),
+    ("стул", "chaise", "la chaise", "une chaise"),
+    ("кот", "chat", "le chat", "un chat"),
+    ("школа", "école", "l’école", "une école"),
+    ("женщина", "femme", "la femme", "une femme"),
+    ("герой", "héros", "le héros", "un héros"),
+    ("мужчина", "homme", "l’homme", "un homme"),
+    ("книга", "livre", "le livre", "un livre"),
+    ("дом", "maison", "la maison", "une maison"),
+    ("компьютер", "ordinateur", "l’ordinateur", "un ordinateur"),
+    ("стол", "table", "la table", "une table"),
+    ("картина", "tableau", "le tableau", "un tableau"),
+    ("автомобиль", "voiture", "la voiture", "une voiture"),
+    ("деревья", "arbres", "les arbres", "des arbres"),
+    ("офисы", "bureaux", "les bureaux", "des bureaux"),
+    ("стулья", "chaises", "les chaises", "des chaises"),
+    ("коты", "chats", "les chats", "des chats"),
+    ("школы", "écoles", "les écoles", "des écoles"),
+    ("женщины", "femmes", "les femmes", "des femmes"),
 )
 
 
@@ -132,3 +156,30 @@ def test_translation_provider_applies_grammar_after_translation():
     assert provider.translate("стол") == "la table"
     assert provider.target_language == "fr"
     assert provider.source_language == "ru"
+
+
+@pytest.mark.parametrize(
+    ("source", "target", "definite", "indefinite"),
+    RUSSIAN_ARTICLE_CASES,
+)
+def test_complete_russian_set_has_deterministic_article_forms(
+    source,
+    target,
+    definite,
+    indefinite,
+):
+    definite_processor = FrenchGrammarProcessor(FrenchArticleMode.DEFINITE)
+    indefinite_processor = FrenchGrammarProcessor(FrenchArticleMode.INDEFINITE)
+    automatic_processor = FrenchGrammarProcessor(FrenchArticleMode.AUTO)
+
+    assert definite_processor.process(source, "вариант Google") == definite
+    assert indefinite_processor.process(source, "вариант Google") == indefinite
+    assert automatic_processor.process(source, "вариант Google") == indefinite
+    assert target in definite or target in indefinite
+
+
+def test_russian_test_file_matches_automated_article_cases():
+    path = Path(__file__).parents[1] / "набор-франс.txt"
+    expected_sources = [source for source, *_expected in RUSSIAN_ARTICLE_CASES]
+
+    assert path.read_text(encoding="utf-8").splitlines() == expected_sources
