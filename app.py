@@ -880,8 +880,7 @@ class MainWindow(QMainWindow):
                 )
                 self._dirty = True
             self._audio_line_number = line_number
-            self._replay_highlight_line = line_number
-            self._render_source_highlights()
+            self._show_synchronized_line(line_number)
             self.statusBar().showMessage(f"Строка: {translated_line}")
             self._play_file(filename)
 
@@ -1021,6 +1020,29 @@ class MainWindow(QMainWindow):
             self.transcription_edit, self._replay_highlight_line, QColor("#ffd54f")
         )
 
+    def _show_synchronized_line(self, line_number: int) -> None:
+        self._replay_highlight_line = line_number
+        self._render_source_highlights()
+        for editor in (
+            self.source_edit,
+            self.translation_edit,
+            self.transcription_edit,
+        ):
+            self._scroll_editor_to_line(editor, line_number)
+
+    @staticmethod
+    def _scroll_editor_to_line(editor: QTextEdit, line_number: int) -> None:
+        block = editor.document().findBlockByNumber(line_number)
+        if not block.isValid():
+            return
+        cursor = editor.textCursor()
+        cursor.setPosition(block.position())
+        cursor_rect = editor.cursorRect(cursor)
+        if editor.viewport().rect().contains(cursor_rect.center()) and editor.isVisible():
+            return
+        editor.setTextCursor(cursor)
+        editor.ensureCursorVisible()
+
     @staticmethod
     def _set_line_highlight(editor: QTextEdit, line_number: int | None, color: QColor) -> None:
         if line_number is None:
@@ -1106,8 +1128,7 @@ class MainWindow(QMainWindow):
 
         line_number = row.index
         source_text = row.source
-        self._replay_highlight_line = line_number
-        self._render_source_highlights()
+        self._show_synchronized_line(line_number)
         current, total = self.sequence.progress
         self.statusBar().showMessage(f"Строка {current} из {total}: подготовка…")
 
@@ -1149,6 +1170,7 @@ class MainWindow(QMainWindow):
                     self.language_controller.transcribe(target_text),
                 )
                 self._dirty = True
+                self._show_synchronized_line(line_number)
             self._audio_line_number = line_number
             self._play_file(filename)
             self.stop_button.setEnabled(True)
