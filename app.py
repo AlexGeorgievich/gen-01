@@ -55,10 +55,10 @@ from gpt01.exporting import (
 from gpt01.french_grammar import FrenchArticleMode
 from gpt01.language_controller import LanguageController
 from gpt01.languages import LANGUAGES
-from gpt01.models import Document, SubtitleCue
+from gpt01.models import Document, SubtitleCue, TranslationRow
 from gpt01.playback import PlaybackSequence
 from gpt01.preferences import Preferences
-from gpt01.rows import build_translation_rows
+from gpt01.rows import build_translation_rows, rows_between
 from gpt01.services import EdgeSpeechProvider
 from gpt01.session import SessionRepository, user_data_root
 from gpt01.state import AppState
@@ -109,8 +109,13 @@ class MainWindow(QMainWindow):
         self._dirty = False
         self._loading_document = False
         self._hover_line_number: int | None = None
+        self._last_source_pointer_line: int | None = None
         self._audio_line_number: int | None = None
         self._replay_highlight_line: int | None = None
+        self._range_a_line: int | None = None
+        self._range_b_line: int | None = None
+        self._sequence_scope: str | None = None
+        self._ab_repeat_ready = False
         self.sequence = PlaybackSequence()
         self._switching_language = False
         self.repository = repository or SessionRepository.for_application(APPLICATION_ROOT)
@@ -183,6 +188,15 @@ class MainWindow(QMainWindow):
         self.translation_toggle_button = QPushButton("−")
         self.translation_toggle_button.setToolTip("Скрыть окно перевода")
         self.translation_toggle_button.setFixedWidth(32)
+        self.mark_a_button = QPushButton("A")
+        self.mark_a_button.setToolTip("Зафиксировать строку под указателем как метку A")
+        self.mark_b_button = QPushButton("B")
+        self.mark_b_button.setToolTip("Зафиксировать строку под указателем как метку B")
+        self.play_ab_button = QPushButton("A–B")
+        self.play_ab_button.setToolTip("Озвучить строки между метками A и B")
+        self.play_ab_button.setEnabled(False)
+        for button in (self.mark_a_button, self.mark_b_button, self.play_ab_button):
+            button.setMinimumWidth(48)
 
         self._build_ui()
         self._populate_languages()
@@ -197,6 +211,7 @@ class MainWindow(QMainWindow):
         self._update_language_labels()
         self._restore_app_state()
         self._apply_editor_font_size()
+        self._update_ab_controls()
 
     @property
     def current_language(self):
@@ -358,6 +373,10 @@ class MainWindow(QMainWindow):
         window_controls.addSpacing(16)
         window_controls.addWidget(self.translation_control_label)
         window_controls.addWidget(self.translation_toggle_button)
+        window_controls.addSpacing(16)
+        window_controls.addWidget(self.mark_a_button)
+        window_controls.addWidget(self.mark_b_button)
+        window_controls.addWidget(self.play_ab_button)
         window_controls.addStretch(1)
 
         voice_box = QGroupBox("Язык и голос Microsoft TTS")
@@ -399,16 +418,22 @@ class MainWindow(QMainWindow):
         self.reload_voices_button.clicked.connect(self.load_voices)
         self.transcription_toggle_button.clicked.connect(self._toggle_transcription_window)
         self.translation_toggle_button.clicked.connect(self._toggle_translation_window)
+        self.mark_a_button.clicked.connect(self.set_range_marker_a)
+        self.mark_b_button.clicked.connect(self.set_range_marker_b)
+        self.play_ab_button.clicked.connect(self.play_ab_range)
         self.source_clear_button.clicked.connect(self.clear_source_window)
         self.translation_clear_button.clicked.connect(self.clear_translation_window)
         self.transcription_clear_button.clicked.connect(self.clear_transcription_window)
         self.language_combo.currentIndexChanged.connect(self._on_language_changed)
         self.voice_combo.currentIndexChanged.connect(self._on_voice_changed)
         self.translation_edit.textChanged.connect(self._on_translation_changed)
-        self.source_edit.textChanged.connect(self._on_text_changed)
+        self.source_edit.textChanged.connect(self._on_source_text_changed)
         self.transcription_edit.textChanged.connect(self._on_text_changed)
         self.line_shortcut = QShortcut(QKeySequence("Ctrl+Space"), self)
         self.line_shortcut.activated.connect(self.speak_line_at_cursor)
+        self.ab_repeat_shortcut = QShortcut(QKeySequence("Space"), self)
+        self.ab_repeat_shortcut.setEnabled(False)
+        self.ab_repeat_shortcut.activated.connect(self.repeat_ab_range)
         self.open_shortcut = QShortcut(QKeySequence("Ctrl+O"), self)
         self.open_shortcut.activated.connect(self.open_file)
         self.player.playbackStateChanged.connect(self._playback_changed)
@@ -574,6 +599,7 @@ class MainWindow(QMainWindow):
         self.replay_button.setEnabled(
             not busy and not self.sequence.active and bool(self.source_edit.toPlainText().strip())
         )
+        self._update_ab_controls()
         self.statusBar().showMessage(message)
 
     @Slot()
@@ -908,7 +934,7 @@ class MainWindow(QMainWindow):
         self.player.setSource(QUrl.fromLocalFile(filename))
         self.player.play()
         self.statusBar().showMessage("Воспроизведение…")
-        self.replay_button.setEnabled(True)
+        self.replay_button.setEnabled(not self.sequence.active)
         self.save_audio_button.setEnabled(True)
         if previous_audio and previous_audio != self.audio_path:
             self.repository.delete_temporary_audio(previous_audio)
@@ -922,6 +948,11 @@ class MainWindow(QMainWindow):
         if not self._loading_document:
             self._dirty = True
         self._reset_audio_state()
+
+    @Slot()
+    def _on_source_text_changed(self) -> None:
+        self._reset_range_markers()
+        self._on_text_changed()
 
     @Slot()
     def _on_translation_changed(self) -> None:
@@ -992,12 +1023,69 @@ class MainWindow(QMainWindow):
             [width if index in visible_indices else 0 for index in range(3)]
         )
 
+    @Slot()
+    def set_range_marker_a(self) -> None:
+        self._set_range_marker("A")
+
+    @Slot()
+    def set_range_marker_b(self) -> None:
+        self._set_range_marker("B")
+
+    def _set_range_marker(self, marker: str) -> None:
+        line_number = self._last_source_pointer_line
+        block = (
+            self.source_edit.document().findBlockByNumber(line_number)
+            if line_number is not None
+            else None
+        )
+        if block is None or not block.isValid():
+            self.statusBar().showMessage(
+                f"Наведите указатель на строку исходного текста перед установкой {marker}."
+            )
+            return
+        if marker == "A":
+            self._range_a_line = line_number
+            self.mark_a_button.setText(f"A:{line_number + 1}")
+        else:
+            self._range_b_line = line_number
+            self.mark_b_button.setText(f"B:{line_number + 1}")
+        self._ab_repeat_ready = False
+        self._render_source_highlights()
+        self._update_ab_controls()
+        self.statusBar().showMessage(f"Метка {marker}: строка {line_number + 1}.")
+
+    def _reset_range_markers(self) -> None:
+        self._range_a_line = None
+        self._range_b_line = None
+        self._last_source_pointer_line = None
+        self._ab_repeat_ready = False
+        self.mark_a_button.setText("A")
+        self.mark_b_button.setText("B")
+        self._render_source_highlights()
+        self._update_ab_controls()
+
+    def _update_ab_controls(self) -> None:
+        if not hasattr(self, "mark_a_button"):
+            return
+        busy = hasattr(self, "progress") and self.progress.isVisible()
+        has_source = bool(self.source_edit.toPlainText().strip())
+        idle = not busy and not self.sequence.active
+        self.mark_a_button.setEnabled(idle and has_source)
+        self.mark_b_button.setEnabled(idle and has_source)
+        has_range = self._range_a_line is not None and self._range_b_line is not None
+        self.play_ab_button.setEnabled(idle and has_source and has_range)
+        if hasattr(self, "ab_repeat_shortcut"):
+            self.ab_repeat_shortcut.setEnabled(
+                idle and has_source and has_range and self._ab_repeat_ready
+            )
+
     def eventFilter(self, watched: QObject, event: QEvent) -> bool:
         if watched is self.source_edit.viewport():
-            if event.type() == QEvent.Type.MouseMove:
+            if event.type() in {QEvent.Type.MouseMove, QEvent.Type.MouseButtonPress}:
                 position = event.position().toPoint()  # type: ignore[attr-defined]
                 cursor = self.source_edit.cursorForPosition(position)
                 self._hover_line_number = cursor.blockNumber()
+                self._last_source_pointer_line = self._hover_line_number
                 self._render_source_highlights()
             elif event.type() == QEvent.Type.Leave:
                 self._hover_line_number = None
@@ -1006,9 +1094,16 @@ class MainWindow(QMainWindow):
 
     def _render_source_highlights(self) -> None:
         selections: list[QTextEdit.ExtraSelection] = []
-        highlights = (
-            (self._replay_highlight_line, QColor("#ffd54f")),
+        if self._range_a_line is not None and self._range_a_line == self._range_b_line:
+            marker_highlights = ((self._range_a_line, QColor("#d1c4e9")),)
+        else:
+            marker_highlights = (
+                (self._range_a_line, QColor("#c8e6c9")),
+                (self._range_b_line, QColor("#bbdefb")),
+            )
+        highlights = marker_highlights + (
             (self._hover_line_number, QColor("#fff59d")),
+            (self._replay_highlight_line, QColor("#ffd54f")),
         )
         for line_number, color in highlights:
             if line_number is None:
@@ -1120,14 +1215,52 @@ class MainWindow(QMainWindow):
             else:
                 QMessageBox.information(self, APP_TITLE, "Нет строк для озвучивания.")
             return
+        self._begin_sequence(rows, "all")
+
+    @Slot()
+    def play_ab_range(self) -> None:
+        self._start_ab_sequence()
+
+    @Slot()
+    def repeat_ab_range(self) -> None:
+        if not self._ab_repeat_ready:
+            return
+        self._start_ab_sequence()
+
+    def _start_ab_sequence(self) -> None:
+        if self._range_a_line is None or self._range_b_line is None:
+            QMessageBox.information(self, APP_TITLE, "Сначала установите метки A и B.")
+            return
+        rows = rows_between(
+            build_translation_rows(
+                self.source_edit.toPlainText(),
+                self.translation_edit.toPlainText(),
+                self.transcription_edit.toPlainText(),
+            ),
+            self._range_a_line,
+            self._range_b_line,
+        )
+        if not rows:
+            QMessageBox.information(
+                self,
+                APP_TITLE,
+                "Между метками A и B нет непустых строк для озвучивания.",
+            )
+            return
+        self._begin_sequence(rows, "ab")
+
+    def _begin_sequence(self, rows: list[TranslationRow], scope: str) -> None:
         if not self.selected_voice():
             QMessageBox.information(self, APP_TITLE, "Выберите голос.")
             return
 
         self._stop_sequence()
+        self._sequence_scope = scope
+        self._ab_repeat_ready = False
         generation = self.sequence.start(rows)
         self.replay_button.setEnabled(False)
         self.stop_button.setEnabled(True)
+        self._update_ab_controls()
         self._play_next_sequence_line(generation)
 
     def _play_next_sequence_line(self, generation: int) -> None:
@@ -1142,7 +1275,10 @@ class MainWindow(QMainWindow):
         source_text = row.source
         self._show_synchronized_line(line_number)
         current, total = self.sequence.progress
-        self.statusBar().showMessage(f"Строка {current} из {total}: подготовка…")
+        prefix = "A–B · " if self._sequence_scope == "ab" else ""
+        self.statusBar().showMessage(
+            f"{prefix}строка {current} из {total}: подготовка…"
+        )
 
         translated_text = row.translation
         voice = self.selected_voice()
@@ -1186,7 +1322,9 @@ class MainWindow(QMainWindow):
             self._audio_line_number = line_number
             self._play_file(filename)
             self.stop_button.setEnabled(True)
-            self.statusBar().showMessage(f"Строка {current} из {total}: воспроизведение…")
+            self.statusBar().showMessage(
+                f"{prefix}строка {current} из {total}: воспроизведение…"
+            )
 
         def sequence_error(message: str) -> None:
             self._stop_sequence("Последовательное озвучивание прервано из-за ошибки.")
@@ -1219,15 +1357,26 @@ class MainWindow(QMainWindow):
         self._play_next_sequence_line(generation)
 
     def _finish_sequence(self) -> None:
+        completed_scope = self._sequence_scope
         self.sequence.complete()
+        self._sequence_scope = None
+        self._ab_repeat_ready = completed_scope == "ab"
         self._replay_highlight_line = None
         self._render_source_highlights()
         self.replay_button.setEnabled(True)
         self.stop_button.setEnabled(False)
-        self.statusBar().showMessage("Последовательное озвучивание завершено.")
+        self._update_ab_controls()
+        if self._ab_repeat_ready:
+            self.statusBar().showMessage(
+                "Диапазон A–B завершён. Нажмите Space для повторного воспроизведения."
+            )
+        else:
+            self.statusBar().showMessage("Последовательное озвучивание завершено.")
 
     def _stop_sequence(self, message: str | None = None) -> None:
         was_active = self.sequence.stop()
+        self._sequence_scope = None
+        self._ab_repeat_ready = False
         self._replay_highlight_line = None
         if self.tasks.foreground:
             self.tasks.cancel_foreground()
@@ -1238,6 +1387,7 @@ class MainWindow(QMainWindow):
             self.replay_button.setEnabled(bool(self.source_edit.toPlainText().strip()))
             self.stop_button.setEnabled(False)
             self.statusBar().showMessage(message or "Последовательное озвучивание остановлено.")
+        self._update_ab_controls()
 
     @Slot()
     def stop_current_operation(self) -> None:
@@ -1284,7 +1434,12 @@ class MainWindow(QMainWindow):
         busy = self.progress.isVisible()
         self.stop_button.setEnabled(playing or busy or self.sequence.active)
         if not playing and not busy and not self.sequence.active:
-            self.statusBar().showMessage("Готово")
+            if self._ab_repeat_ready:
+                self.statusBar().showMessage(
+                    "Диапазон A–B завершён. Нажмите Space для повторного воспроизведения."
+                )
+            else:
+                self.statusBar().showMessage("Готово")
 
     @Slot()
     def save_file(self) -> None:

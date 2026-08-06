@@ -1,6 +1,16 @@
 from .models import TranslationRow
 
 
+def rows_between(
+    rows: list[TranslationRow],
+    first_line: int,
+    second_line: int,
+) -> list[TranslationRow]:
+    """Return rows inside an inclusive line range, independent of marker order."""
+    start, end = sorted((first_line, second_line))
+    return [row for row in rows if start <= row.index <= end]
+
+
 def build_translation_rows(
     source: str, translation: str = "", transcription: str = ""
 ) -> list[TranslationRow]:
