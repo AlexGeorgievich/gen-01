@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import re
 import shutil
+import unicodedata
 from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
@@ -11,6 +12,7 @@ from .models import Document
 from .storage import ORIGINAL_MARKER, TRANSLATION_MARKER, serialize_document
 
 _SENTENCE_END = re.compile(r"[.!?…。！？][\"'»”\)\]]*\s*$")
+_COLUMN_WIDTHS = {1: 116, 2: 55, 3: 36}
 
 
 class ExportKind(StrEnum):
@@ -37,6 +39,72 @@ EXPORT_LABELS = {
 class ExportResult:
     text_path: Path
     audio_path: Path | None = None
+
+
+def display_width(text: str) -> int:
+    width = 0
+    for character in text:
+        if unicodedata.combining(character):
+            continue
+        width += 2 if unicodedata.east_asian_width(character) in {"W", "F"} else 1
+    return width
+
+
+def _split_visual(text: str, width: int) -> list[str]:
+    parts: list[str] = []
+    current = ""
+    current_width = 0
+    for character in text:
+        character_width = display_width(character)
+        if current and current_width + character_width > width:
+            parts.append(current)
+            current = ""
+            current_width = 0
+        current += character
+        current_width += character_width
+    if current or not parts:
+        parts.append(current)
+    return parts
+
+
+def _wrap_cell(text: str, width: int) -> list[str]:
+    words = text.replace("\t", "    ").split()
+    if not words:
+        return [""]
+    lines: list[str] = []
+    current = ""
+    for word in words:
+        if display_width(word) > width:
+            if current:
+                lines.append(current)
+                current = ""
+            pieces = _split_visual(word, width)
+            lines.extend(pieces[:-1])
+            current = pieces[-1]
+            continue
+        candidate = f"{current} {word}" if current else word
+        if current and display_width(candidate) > width:
+            lines.append(current)
+            current = word
+        else:
+            current = candidate
+    if current:
+        lines.append(current)
+    return lines or [""]
+
+
+def _pad_cell(text: str, width: int) -> str:
+    return text + " " * max(0, width - display_width(text))
+
+
+def _table_row(cells: list[str], widths: list[int]) -> str:
+    return "|" + "|".join(
+        f" {_pad_cell(cell, width)} " for cell, width in zip(cells, widths, strict=True)
+    ) + "|"
+
+
+def _table_border(widths: list[int]) -> str:
+    return "+" + "+".join("-" * (width + 2) for width in widths) + "+"
 
 
 def render_columns(
@@ -66,8 +134,10 @@ def render_columns(
             ("Перевод", document.translation),
             ("Транскрипция", document.transcription),
         ]
-    headers = tuple(header for header, _text in definitions)
+    headers = [header for header, _text in definitions]
     columns = [lines(text) for _header, text in definitions]
+    widths = [_COLUMN_WIDTHS[len(columns)]] * len(columns)
+    border = _table_border(widths)
     row_count = max((len(column) for column in columns), default=0)
     blocks: list[str] = []
     start = 0
@@ -82,16 +152,31 @@ def render_columns(
                 break
             end += 1
 
-        rows = ["\t".join(headers)] if not blocks else []
+        rows = [border]
+        if not blocks:
+            rows.extend([_table_row(headers, widths), border])
         for row_index in range(start, end):
             cells = [
-                column[row_index].replace("\t", "    ") if row_index < len(column) else ""
+                column[row_index] if row_index < len(column) else ""
                 for column in columns
             ]
-            rows.append("\t".join(cells))
+            wrapped_cells = [
+                _wrap_cell(cell, width)
+                for cell, width in zip(cells, widths, strict=True)
+            ]
+            physical_height = max(len(cell_lines) for cell_lines in wrapped_cells)
+            for physical_index in range(physical_height):
+                physical_cells = [
+                    cell_lines[physical_index] if physical_index < len(cell_lines) else ""
+                    for cell_lines in wrapped_cells
+                ]
+                rows.append(_table_row(physical_cells, widths))
+            rows.append(border)
         blocks.append("\n".join(rows))
         start = end
-    return "\n\n".join(blocks) + "\n" if blocks else "\t".join(headers) + "\n"
+    if blocks:
+        return "\n\n".join(blocks) + "\n"
+    return "\n".join((border, _table_row(headers, widths), border)) + "\n"
 
 
 def render_three_columns(document: Document, block_size: int = 10) -> str:

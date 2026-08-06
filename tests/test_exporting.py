@@ -4,6 +4,7 @@ from gpt01.errors import StorageError
 from gpt01.exporting import (
     ExportKind,
     ExportLayout,
+    display_width,
     export_document,
     render_columns,
     render_export,
@@ -57,11 +58,11 @@ def test_three_column_export_has_titles_and_synchronised_rows():
 
     rendered = render_three_columns(document)
 
-    assert rendered.splitlines() == [
-        "Исходный текст\tПеревод\tТранскрипция",
-        "one\tun\tun",
-        "two\tdeux\tdeux",
-    ]
+    assert rendered.count("Исходный текст") == 1
+    assert rendered.count("Перевод") == 1
+    assert rendered.count("Транскрипция") == 1
+    assert "| one" in rendered and "| un" in rendered
+    assert "| two" in rendered and "| deux" in rendered
 
 
 def test_three_column_export_has_one_title_and_breaks_after_ten_complete_sentences():
@@ -69,9 +70,11 @@ def test_three_column_export_has_one_title_and_breaks_after_ten_complete_sentenc
 
     rendered = render_three_columns(Document(values, values, values))
 
-    assert rendered.count("Исходный текст\tПеревод\tТранскрипция") == 1
-    assert "line 9.\tline 9.\tline 9.\n\nline 10." in rendered
-    assert "line 19.\tline 19.\tline 19.\n\nline 20." in rendered
+    blocks = rendered.strip().split("\n\n")
+    assert len(blocks) == 3
+    assert rendered.count("Исходный текст") == 1
+    assert "line 9." in blocks[0] and "line 10." in blocks[1]
+    assert "line 19." in blocks[1] and "line 20." in blocks[2]
 
 
 def test_column_break_moves_to_end_of_sentence():
@@ -81,16 +84,20 @@ def test_column_break_moves_to_end_of_sentence():
 
     rendered = render_three_columns(Document(values, values, values))
 
-    assert "Long sentence\tLong sentence\tLong sentence\n\n" not in rendered
-    assert "continues\tcontinues\tcontinues\n\n" not in rendered
-    assert "ends here.\tends here.\tends here.\n\nNext sentence." in rendered
+    blocks = rendered.strip().split("\n\n")
+    assert len(blocks) == 2
+    assert "Long sentence" in blocks[0]
+    assert "continues" in blocks[0]
+    assert "ends here." in blocks[0]
+    assert "Next sentence." in blocks[1]
 
 
 def test_three_column_export_preserves_missing_parallel_lines():
     rendered = render_three_columns(Document("one\ntwo", "un", ""))
 
-    assert "one\tun\t" in rendered
-    assert "two\t\t" in rendered
+    data_lines = [line for line in rendered.splitlines() if line.startswith("|")]
+    assert any("one" in line and "un" in line for line in data_lines)
+    assert any("two" in line and line.count("|") == 4 for line in data_lines)
 
 
 def test_learning_kit_supports_three_column_layout(tmp_path):
@@ -106,9 +113,7 @@ def test_learning_kit_supports_three_column_layout(tmp_path):
         layout=ExportLayout.THREE_COLUMNS,
     )
 
-    assert target.read_text(encoding="utf-8").startswith(
-        "Исходный текст\tПеревод\tТранскрипция"
-    )
+    assert "Исходный текст" in target.read_text(encoding="utf-8")
 
 
 def test_translation_only_supports_column_layout_and_ten_row_blocks():
@@ -116,8 +121,10 @@ def test_translation_only_supports_column_layout_and_ten_row_blocks():
 
     rendered = render_columns(Document(translation=values), ExportKind.TRANSLATION)
 
+    blocks = rendered.strip().split("\n\n")
     assert rendered.count("Перевод") == 1
-    assert "translation 9.\n\ntranslation 10." in rendered
+    assert "translation 9." in blocks[0]
+    assert "translation 10." in blocks[1]
     assert "Исходный текст" not in rendered
 
 
@@ -128,8 +135,24 @@ def test_bilingual_supports_two_column_layout():
         ExportLayout.THREE_COLUMNS,
     )
 
-    assert rendered.splitlines() == [
-        "Исходный текст\tПеревод",
-        "one\tun",
-        "two\tdeux",
-    ]
+    assert rendered.count("Исходный текст") == 1
+    assert rendered.count("Перевод") == 1
+    assert "one" in rendered and "un" in rendered
+    assert "two" in rendered and "deux" in rendered
+
+
+def test_fixed_width_table_wraps_long_multilingual_cells_without_mixing():
+    document = Document(
+        "Очень длинное русское предложение о контроллинге и внутренних затратах компании.",
+        "关于 SAP 主题的提案：控制模块负责公司内部成本的核算和分析。",
+        "/kənˈtroʊlɪŋ ˈmɒdjuːl ænd ˈɪntənəl kɒsts/",
+    )
+
+    rendered = render_three_columns(document)
+    table_lines = [line for line in rendered.splitlines() if line]
+
+    assert "\t" not in rendered
+    assert len({display_width(line) for line in table_lines}) == 1
+    assert max(display_width(line) for line in table_lines) <= 120
+    assert "контроллинге" in rendered
+    assert "控制模块" in rendered
