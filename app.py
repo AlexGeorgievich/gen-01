@@ -60,7 +60,7 @@ from gpt01.playback import PlaybackSequence
 from gpt01.preferences import Preferences
 from gpt01.rows import build_translation_rows
 from gpt01.services import EdgeSpeechProvider
-from gpt01.session import SessionRepository
+from gpt01.session import SessionRepository, user_data_root
 from gpt01.state import AppState
 from gpt01.storage import load_document, save_document
 from gpt01.structured_translation import (
@@ -80,7 +80,17 @@ OPEN_FILTER = (
 )
 TEXT_FILTER = "Текстовые файлы (*.txt);;Все файлы (*.*)"
 SRT_FILTER = "Субтитры SubRip (*.srt);;Все файлы (*.*)"
-LOG_PATH = Path(__file__).parent / "gpt01.log"
+APPLICATION_ROOT = (
+    Path(sys.executable).resolve().parent
+    if getattr(sys, "frozen", False)
+    else Path(__file__).resolve().parent
+)
+try:
+    USER_DATA_ROOT = user_data_root()
+    USER_DATA_ROOT.mkdir(parents=True, exist_ok=True)
+    LOG_PATH = USER_DATA_ROOT / "gpt01.log"
+except OSError:
+    LOG_PATH = Path(tempfile.gettempdir()) / "gpt01.log"
 logging.basicConfig(
     filename=LOG_PATH,
     level=logging.INFO,
@@ -103,7 +113,7 @@ class MainWindow(QMainWindow):
         self._replay_highlight_line: int | None = None
         self.sequence = PlaybackSequence()
         self._switching_language = False
-        self.repository = repository or SessionRepository(Path(__file__).parent)
+        self.repository = repository or SessionRepository.for_application(APPLICATION_ROOT)
         self.preferences = self.repository.load_preferences()
         self.language_controller = LanguageController(
             self.repository.load_selected_language(),
@@ -1414,7 +1424,7 @@ class MainWindow(QMainWindow):
         QMessageBox.critical(
             self,
             APP_TITLE,
-            f"Операция не выполнена.\n\n{message}\n\nПодробности записаны в gpt01.log.",
+            f"Операция не выполнена.\n\n{message}\n\nПодробности записаны в {LOG_PATH}.",
         )
 
     def _confirm_discard_changes(self) -> bool:

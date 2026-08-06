@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import shutil
 import tempfile
+from collections.abc import Mapping
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
@@ -17,6 +19,16 @@ from .preferences import Preferences, load_preferences, save_preferences
 from .state import AppState, load_app_state, save_app_state
 
 LOGGER = logging.getLogger(__name__)
+USER_DATA_DIRECTORY = "GPT01"
+MIGRATION_MARKER_NAME = ".migration-v1.json"
+
+
+def user_data_root(environ: Mapping[str, str] | None = None) -> Path:
+    """Return the per-user writable application directory."""
+    environment = os.environ if environ is None else environ
+    local_app_data = environment.get("LOCALAPPDATA", "").strip()
+    base = Path(local_app_data) if local_app_data else Path.home() / "AppData" / "Local"
+    return base / USER_DATA_DIRECTORY
 
 
 @dataclass(frozen=True, slots=True)
@@ -28,13 +40,78 @@ class RestoredSession:
 class SessionRepository:
     """Own persistent paths and serialization for language-specific sessions."""
 
-    def __init__(self, application_root: Path) -> None:
+    def __init__(self, application_root: Path, legacy_root: Path | None = None) -> None:
         self.application_root = application_root
+        self.legacy_root = legacy_root
         self.data_root = application_root / "language_data"
         self.selection_path = application_root / "language_selection.json"
         self.preferences_path = application_root / "settings.json"
         self.legacy_state_path = application_root / "app_state.json"
         self.legacy_audio_path = application_root / "last_audio.mp3"
+        self.migration_marker_path = application_root / MIGRATION_MARKER_NAME
+
+    @classmethod
+    def for_application(
+        cls,
+        application_root: Path,
+        *,
+        storage_root: Path | None = None,
+    ) -> SessionRepository:
+        repository = cls(
+            storage_root or user_data_root(),
+            legacy_root=application_root,
+        )
+        try:
+            repository.migrate_legacy_data()
+        except OSError:
+            LOGGER.exception("Could not migrate application data from %s", application_root)
+        return repository
+
+    def migrate_legacy_data(self) -> bool:
+        """Copy legacy project-local data once, without overwriting newer files."""
+        if not self.legacy_root or self.migration_marker_path.exists():
+            return False
+        try:
+            if self.legacy_root.resolve() == self.application_root.resolve():
+                return False
+        except OSError:
+            pass
+
+        self.application_root.mkdir(parents=True, exist_ok=True)
+        for name in (
+            "settings.json",
+            "language_selection.json",
+            "app_state.json",
+            "last_audio.mp3",
+        ):
+            self._copy_missing_file(self.legacy_root / name, self.application_root / name)
+
+        legacy_languages = self.legacy_root / "language_data"
+        if legacy_languages.is_dir():
+            for source in legacy_languages.rglob("*"):
+                if not source.is_file() or source.is_symlink():
+                    continue
+                relative = source.relative_to(legacy_languages)
+                self._copy_missing_file(source, self.data_root / relative)
+
+        temporary = self.migration_marker_path.with_suffix(".tmp")
+        temporary.write_text(
+            json.dumps(
+                {"version": 1, "source": str(self.legacy_root.resolve())},
+                ensure_ascii=False,
+                indent=2,
+            ),
+            encoding="utf-8",
+        )
+        temporary.replace(self.migration_marker_path)
+        return True
+
+    @staticmethod
+    def _copy_missing_file(source: Path, target: Path) -> None:
+        if not source.is_file() or target.exists():
+            return
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(source, target)
 
     def language_directory(self, profile: LanguageProfile) -> Path:
         return self.data_root / profile.key
