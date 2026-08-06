@@ -44,6 +44,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from gpt01.audio_cache import LineAudioCache
 from gpt01.batch import BatchProcessor, BatchResult
 from gpt01.errors import AppError
 from gpt01.exporting import (
@@ -115,6 +116,7 @@ class MainWindow(QMainWindow):
         self._range_b_line: int | None = None
         self._sequence_scope: str | None = None
         self._ab_repeat_ready = False
+        self.ab_audio_cache = LineAudioCache()
         self.sequence = PlaybackSequence()
         self._switching_language = False
         self.repository = repository or SessionRepository.for_application(APPLICATION_ROOT)
@@ -194,7 +196,17 @@ class MainWindow(QMainWindow):
         self.play_ab_button = QPushButton("A–B")
         self.play_ab_button.setToolTip("Озвучить строки между метками A и B")
         self.play_ab_button.setEnabled(False)
-        for button in (self.mark_a_button, self.mark_b_button, self.play_ab_button):
+        self.reset_ab_button = QPushButton("Сброс")
+        self.reset_ab_button.setToolTip(
+            "Остановить A–B, удалить метки и очистить аудиокэш диапазона"
+        )
+        self.reset_ab_button.setEnabled(False)
+        for button in (
+            self.mark_a_button,
+            self.mark_b_button,
+            self.play_ab_button,
+            self.reset_ab_button,
+        ):
             button.setMinimumWidth(48)
 
         self._build_ui()
@@ -376,6 +388,7 @@ class MainWindow(QMainWindow):
         window_controls.addWidget(self.mark_a_button)
         window_controls.addWidget(self.mark_b_button)
         window_controls.addWidget(self.play_ab_button)
+        window_controls.addWidget(self.reset_ab_button)
         window_controls.addStretch(1)
 
         voice_box = QGroupBox("Язык и голос Microsoft TTS")
@@ -420,6 +433,7 @@ class MainWindow(QMainWindow):
         self.mark_a_button.clicked.connect(self.set_range_marker_a)
         self.mark_b_button.clicked.connect(self.set_range_marker_b)
         self.play_ab_button.clicked.connect(self.play_ab_range)
+        self.reset_ab_button.clicked.connect(self.reset_ab_range)
         self.source_clear_button.clicked.connect(self.clear_source_window)
         self.translation_clear_button.clicked.connect(self.clear_translation_window)
         self.transcription_clear_button.clicked.connect(self.clear_transcription_window)
@@ -935,7 +949,11 @@ class MainWindow(QMainWindow):
         self.statusBar().showMessage("Воспроизведение…")
         self.replay_button.setEnabled(not self.sequence.active)
         self.save_audio_button.setEnabled(True)
-        if previous_audio and previous_audio != self.audio_path:
+        if (
+            previous_audio
+            and previous_audio != self.audio_path
+            and not self.ab_audio_cache.contains(previous_audio)
+        ):
             self.repository.delete_temporary_audio(previous_audio)
 
     @Slot()
@@ -950,8 +968,8 @@ class MainWindow(QMainWindow):
 
     @Slot()
     def _on_source_text_changed(self) -> None:
-        self._reset_range_markers()
         self._on_text_changed()
+        self._reset_range_markers()
 
     @Slot()
     def _on_translation_changed(self) -> None:
@@ -1056,8 +1074,19 @@ class MainWindow(QMainWindow):
         self._ab_repeat_ready = False
         self.mark_a_button.setText("A")
         self.mark_b_button.setText("B")
+        self.ab_audio_cache.clear()
         self._render_source_highlights()
         self._update_ab_controls()
+
+    @Slot()
+    def reset_ab_range(self) -> None:
+        if self.sequence.active and self._sequence_scope == "ab":
+            self._stop_sequence("Воспроизведение A–B остановлено.")
+        elif self.ab_audio_cache.contains(self.audio_path):
+            self.stop_audio()
+            self.audio_path = None
+        self._reset_range_markers()
+        self.statusBar().showMessage("Метки A/B и аудиокэш диапазона сброшены.")
 
     def _update_ab_controls(self) -> None:
         if not hasattr(self, "mark_a_button"):
@@ -1069,6 +1098,10 @@ class MainWindow(QMainWindow):
         self.mark_b_button.setEnabled(idle and has_source)
         has_range = self._range_a_line is not None and self._range_b_line is not None
         self.play_ab_button.setEnabled(idle and has_source and has_range)
+        has_ab_state = has_range or self.ab_audio_cache.has_files or (
+            self.sequence.active and self._sequence_scope == "ab"
+        )
+        self.reset_ab_button.setEnabled(has_ab_state)
         if hasattr(self, "ab_repeat_shortcut"):
             self.ab_repeat_shortcut.setEnabled(
                 idle and has_source and has_range and self._ab_repeat_ready
@@ -1183,6 +1216,7 @@ class MainWindow(QMainWindow):
             old_path = self.audio_path
             self.audio_path = None
             self.repository.delete_temporary_audio(old_path)
+        self.ab_audio_cache.clear()
         self.replay_button.setEnabled(bool(self.source_edit.toPlainText().strip()))
         self.save_audio_button.setEnabled(False)
         if not self.progress.isVisible():
@@ -1257,6 +1291,27 @@ class MainWindow(QMainWindow):
         self._update_ab_controls()
         self._play_next_sequence_line(generation)
 
+    def _ab_audio_cache_key(
+        self,
+        line_number: int,
+        source_text: str,
+        speech_text: str,
+        voice: str,
+        settings: TtsSettings,
+    ) -> str:
+        return "\x1f".join(
+            (
+                self.current_language.key,
+                voice,
+                str(settings.rate),
+                str(settings.pitch),
+                str(settings.volume),
+                str(line_number),
+                source_text,
+                speech_text,
+            )
+        )
+
     def _play_next_sequence_line(self, generation: int) -> None:
         if not self.sequence.matches(generation):
             return
@@ -1280,29 +1335,57 @@ class MainWindow(QMainWindow):
             self._stop_sequence("Голос не выбран.")
             return
         tts_settings = self.tts_settings
+        use_ab_cache = self._sequence_scope == "ab"
 
-        def prepare_line(cancelled: Callable[[], bool]) -> tuple[str, str, bool]:
+        def prepare_line(cancelled: Callable[[], bool]) -> tuple[str, str, bool, bool]:
             target_text = translated_text or self.translator.translate(source_text, cancelled)
             target_text = self.language_controller.prepare_translation(
                 source_text,
                 target_text,
             )
-            fd, filename = tempfile.mkstemp(prefix="gpt01_sequence_tts_", suffix=".mp3")
-            os.close(fd)
-            output = Path(filename)
-            self.speech.synthesize(
-                self.language_controller.prepare_speech(target_text),
-                voice,
-                output,
-                cancelled,
-                settings=tts_settings,
-            )
-            return str(output), target_text, target_text != translated_text
+            speech_text = self.language_controller.prepare_speech(target_text)
+            cache_key: str | None = None
+            if use_ab_cache:
+                cache_key = self._ab_audio_cache_key(
+                    line_number,
+                    source_text,
+                    speech_text,
+                    voice,
+                    tts_settings,
+                )
+                cached = self.ab_audio_cache.get(cache_key)
+                if cached:
+                    return str(cached), target_text, target_text != translated_text, True
+                output = self.ab_audio_cache.path_for(cache_key)
+            else:
+                fd, filename = tempfile.mkstemp(
+                    prefix="gpt01_sequence_tts_",
+                    suffix=".mp3",
+                )
+                os.close(fd)
+                output = Path(filename)
+            try:
+                self.speech.synthesize(
+                    speech_text,
+                    voice,
+                    output,
+                    cancelled,
+                    settings=tts_settings,
+                )
+            except Exception:
+                if cache_key:
+                    self.ab_audio_cache.discard(cache_key)
+                else:
+                    output.unlink(missing_ok=True)
+                raise
+            return str(output), target_text, target_text != translated_text, False
 
-        def play_line(result: tuple[str, str, bool]) -> None:
-            filename, target_text, translation_changed = result
+        def play_line(result: tuple[str, str, bool, bool]) -> None:
+            filename, target_text, translation_changed, cache_hit = result
             if not self.sequence.matches(generation):
-                Path(filename).unlink(missing_ok=True)
+                output = Path(filename)
+                if not self.ab_audio_cache.contains(output):
+                    output.unlink(missing_ok=True)
                 return
             if translation_changed:
                 self._set_parallel_line(self.translation_edit, line_number, target_text)
@@ -1317,7 +1400,8 @@ class MainWindow(QMainWindow):
             self._play_file(filename)
             self.stop_button.setEnabled(True)
             self.statusBar().showMessage(
-                f"{prefix}строка {current} из {total}: воспроизведение…"
+                f"{prefix}строка {current} из {total}: "
+                f"{'из кэша' if cache_hit else 'воспроизведение'}…"
             )
 
         def sequence_error(message: str) -> None:
@@ -1671,6 +1755,7 @@ class MainWindow(QMainWindow):
         self.player.setSource(QUrl())
         if self.audio_path:
             self.repository.delete_temporary_audio(self.audio_path)
+        self.ab_audio_cache.clear()
         event.accept()
 
 

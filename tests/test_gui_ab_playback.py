@@ -3,6 +3,7 @@ import os
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 import pytest  # noqa: E402
+from PySide6.QtMultimedia import QMediaPlayer  # noqa: E402
 from PySide6.QtTest import QTest  # noqa: E402
 from PySide6.QtWidgets import QApplication  # noqa: E402
 
@@ -150,6 +151,77 @@ def test_stop_does_not_arm_space_repeat(qapp, tmp_path):
     assert not window.sequence.active
     assert not window._ab_repeat_ready
     assert not window.ab_repeat_shortcut.isEnabled()
+
+    window._dirty = False
+    window.close()
+
+
+def test_reset_button_stops_active_ab_sequence_and_removes_markers(qapp, tmp_path):
+    window = MainWindow(SessionRepository(tmp_path))
+    window.source_edit.setPlainText("one\ntwo")
+    set_caret_line(window, 0)
+    window.set_range_marker_a()
+    set_caret_line(window, 1)
+    window.set_range_marker_b()
+    window._play_next_sequence_line = lambda _generation: None
+    window.play_ab_range()
+
+    window.reset_ab_button.click()
+
+    assert not window.sequence.active
+    assert window._range_a_line is None
+    assert window._range_b_line is None
+    assert not window.reset_ab_button.isEnabled()
+
+    window._dirty = False
+    window.close()
+
+
+def test_ab_repeat_reuses_cached_line_audio_and_reset_removes_it(qapp, tmp_path):
+    window = MainWindow(SessionRepository(tmp_path))
+    window.source_edit.setPlainText("one\ntwo")
+    window.translation_edit.setPlainText("一\n二")
+    set_caret_line(window, 0)
+    window.set_range_marker_a()
+    set_caret_line(window, 1)
+    window.set_range_marker_b()
+    synthesized = []
+    played = []
+
+    def synthesize(text, _voice, output, _cancelled, *, settings=None):
+        synthesized.append((text, settings))
+        output.write_bytes(b"mp3")
+
+    window.speech.synthesize = synthesize
+    window._run_task = lambda function, on_result, *_args: on_result(
+        function(lambda: False)
+    )
+    window._play_file = played.append
+
+    window.play_ab_range()
+    window._media_status_changed(QMediaPlayer.MediaStatus.EndOfMedia)
+    window._media_status_changed(QMediaPlayer.MediaStatus.EndOfMedia)
+
+    first_cycle = list(played)
+    assert len(synthesized) == 2
+    assert window._ab_repeat_ready
+    assert window.ab_audio_cache.has_files
+
+    window.repeat_ab_range()
+    window._media_status_changed(QMediaPlayer.MediaStatus.EndOfMedia)
+    window._media_status_changed(QMediaPlayer.MediaStatus.EndOfMedia)
+
+    assert len(synthesized) == 2
+    assert played[2:] == first_cycle
+    cache_directory = window.ab_audio_cache.directory
+
+    window.reset_ab_button.click()
+
+    assert window._range_a_line is None
+    assert window._range_b_line is None
+    assert not window.ab_audio_cache.has_files
+    assert cache_directory is not None
+    assert not cache_directory.exists()
 
     window._dirty = False
     window.close()
