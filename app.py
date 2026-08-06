@@ -164,6 +164,9 @@ class MainWindow(QMainWindow):
         self.transcription_toggle_button = QPushButton("−")
         self.transcription_toggle_button.setToolTip("Скрыть окно транскрипции")
         self.transcription_toggle_button.setFixedWidth(32)
+        self.translation_toggle_button = QPushButton("−")
+        self.translation_toggle_button.setToolTip("Скрыть окно перевода")
+        self.translation_toggle_button.setFixedWidth(32)
 
         self._build_ui()
         self._populate_languages()
@@ -330,10 +333,15 @@ class MainWindow(QMainWindow):
         self.editors.addWidget(self.transcription_box)
         self.editors.setSizes([420, 420, 420])
 
-        transcription_controls = QHBoxLayout()
-        transcription_controls.addWidget(QLabel("Окно «Транскрипция»:"))
-        transcription_controls.addWidget(self.transcription_toggle_button)
-        transcription_controls.addStretch(1)
+        window_controls = QHBoxLayout()
+        self.transcription_control_label = QLabel("Транскрипции:")
+        self.translation_control_label = QLabel("Перевод:")
+        window_controls.addWidget(self.transcription_control_label)
+        window_controls.addWidget(self.transcription_toggle_button)
+        window_controls.addSpacing(16)
+        window_controls.addWidget(self.translation_control_label)
+        window_controls.addWidget(self.translation_toggle_button)
+        window_controls.addStretch(1)
 
         voice_box = QGroupBox("Язык и голос Microsoft TTS")
         voice_box_layout = QHBoxLayout(voice_box)
@@ -347,7 +355,7 @@ class MainWindow(QMainWindow):
         central = QWidget()
         layout = QVBoxLayout(central)
         layout.addWidget(voice_box)
-        layout.addLayout(transcription_controls)
+        layout.addLayout(window_controls)
         layout.addWidget(self.editors, 1)
         self.setCentralWidget(central)
 
@@ -373,6 +381,7 @@ class MainWindow(QMainWindow):
         self.settings_button.clicked.connect(self.open_settings)
         self.reload_voices_button.clicked.connect(self.load_voices)
         self.transcription_toggle_button.clicked.connect(self._toggle_transcription_window)
+        self.translation_toggle_button.clicked.connect(self._toggle_translation_window)
         self.source_clear_button.clicked.connect(self.clear_source_window)
         self.translation_clear_button.clicked.connect(self.clear_translation_window)
         self.transcription_clear_button.clicked.connect(self.clear_transcription_window)
@@ -874,6 +883,10 @@ class MainWindow(QMainWindow):
     def _toggle_transcription_window(self) -> None:
         self._set_transcription_window_visible(self.transcription_box.isHidden())
 
+    @Slot()
+    def _toggle_translation_window(self) -> None:
+        self._set_translation_window_visible(self.translation_box.isHidden())
+
     def _set_transcription_window_visible(self, visible: bool) -> None:
         self.transcription_box.setVisible(visible)
         self.transcription_toggle_button.setText("−" if visible else "+")
@@ -883,8 +896,29 @@ class MainWindow(QMainWindow):
             else "Открыть окно транскрипции"
         )
         if visible:
-            width = max(self.editors.width(), 3)
-            self.editors.setSizes([width // 3, width // 3, width // 3])
+            self._resize_visible_editor_windows()
+
+    def _set_translation_window_visible(self, visible: bool) -> None:
+        self.translation_box.setVisible(visible)
+        self.translation_toggle_button.setText("−" if visible else "+")
+        self.translation_toggle_button.setToolTip(
+            "Скрыть окно перевода" if visible else "Открыть окно перевода"
+        )
+        if visible:
+            self._resize_visible_editor_windows()
+
+    def _resize_visible_editor_windows(self) -> None:
+        visible_indices = [0]
+        if not self.translation_box.isHidden():
+            visible_indices.append(1)
+        if not self.transcription_box.isHidden():
+            visible_indices.append(2)
+
+        total_width = max(sum(self.editors.sizes()), self.editors.width(), 3)
+        width = total_width // len(visible_indices)
+        self.editors.setSizes(
+            [width if index in visible_indices else 0 for index in range(3)]
+        )
 
     def eventFilter(self, watched: QObject, event: QEvent) -> bool:
         if watched is self.source_edit.viewport():
@@ -1277,6 +1311,7 @@ class MainWindow(QMainWindow):
         self.audio_output.setVolume(state.volume)
         self.tts_settings = state.tts_settings
         self._set_transcription_window_visible(state.transcription_visible)
+        self._set_translation_window_visible(state.translation_window_visible)
         if len(state.splitter_sizes) == 3:
             self.editors.setSizes(state.splitter_sizes)
         if state.window_geometry:
@@ -1306,6 +1341,7 @@ class MainWindow(QMainWindow):
             transcription=self.transcription_edit.toPlainText(),
             selected_voice=self.selected_voice() or "",
             transcription_visible=not self.transcription_box.isHidden(),
+            translation_window_visible=not self.translation_box.isHidden(),
             splitter_sizes=self.editors.sizes(),
             window_geometry=geometry,
             volume=self.audio_output.volume(),

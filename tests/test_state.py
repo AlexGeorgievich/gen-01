@@ -11,6 +11,7 @@ def test_state_round_trip(tmp_path):
         transcription="nǐ hǎo",
         selected_voice="zh-CN-XiaoxiaoNeural",
         transcription_visible=False,
+        translation_window_visible=False,
         splitter_sizes=[600, 0, 600],
         window_geometry="Z2VvbWV0cnk=",
         volume=0.5,
@@ -51,6 +52,13 @@ def test_legacy_visibility_field_is_supported(tmp_path):
     path = tmp_path / "state.json"
     path.write_text('{"translation_visible": false}', encoding="utf-8")
     assert load_app_state(path).transcription_visible is False
+
+
+def test_translation_window_is_visible_by_default_for_legacy_state(tmp_path):
+    path = tmp_path / "state.json"
+    path.write_text('{"translation_visible": false}', encoding="utf-8")
+
+    assert load_app_state(path).translation_window_visible is True
 
 
 def test_tts_settings_are_clamped_when_loading(tmp_path):
