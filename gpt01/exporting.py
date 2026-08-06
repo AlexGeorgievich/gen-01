@@ -12,7 +12,10 @@ from .models import Document
 from .storage import ORIGINAL_MARKER, TRANSLATION_MARKER, serialize_document
 
 _SENTENCE_END = re.compile(r"[.!?…。！？][\"'»”\)\]]*\s*$")
-_COLUMN_WIDTHS = {1: 116, 2: 55, 3: 36}
+# Keep every rendered table at 79 characters. Text editors commonly wrap at
+# 80 columns; a wider logical row visually moves later columns under the first
+# one even though the saved delimiters are correct.
+_COLUMN_WIDTHS = {1: 75, 2: 36, 3: 23}
 
 
 class ExportKind(StrEnum):

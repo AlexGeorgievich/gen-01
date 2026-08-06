@@ -153,6 +153,28 @@ def test_fixed_width_table_wraps_long_multilingual_cells_without_mixing():
 
     assert "\t" not in rendered
     assert len({display_width(line) for line in table_lines}) == 1
-    assert max(display_width(line) for line in table_lines) <= 120
+    assert max(display_width(line) for line in table_lines) == 79
     assert "контроллинге" in rendered
     assert "控制模块" in rendered
+
+
+@pytest.mark.parametrize(
+    ("kind", "expected_separators"),
+    [
+        (ExportKind.TRANSLATION, 2),
+        (ExportKind.BILINGUAL, 3),
+        (ExportKind.FULL, 4),
+    ],
+)
+def test_column_table_fits_80_column_editor(kind, expected_separators):
+    document = Document(
+        "Предложений по теме SAP: модуль «Контроллинг».",
+        "关于 SAP 主题的提案：“控制”模块。",
+        "guān yú S A P zhǔ tí de tí àn",
+    )
+
+    rendered = render_columns(document, kind)
+    table_lines = [line for line in rendered.splitlines() if line]
+
+    assert all(display_width(line) == 79 for line in table_lines)
+    assert all(line.count("|") == expected_separators for line in table_lines if line[0] == "|")
