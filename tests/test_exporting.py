@@ -10,6 +10,7 @@ from gpt01.exporting import (
     render_export,
     render_three_columns,
 )
+from gpt01.languages import get_language
 from gpt01.models import Document
 from gpt01.storage import load_document
 
@@ -139,6 +140,59 @@ def test_bilingual_supports_two_column_layout():
     assert rendered.count("Перевод") == 1
     assert "one" in rendered and "un" in rendered
     assert "two" in rendered and "deux" in rendered
+
+
+def test_chinese_bilingual_columns_use_pinyin_instead_of_han_characters():
+    rendered = render_export(
+        Document("привет", "你好", "nǐ hǎo"),
+        ExportKind.BILINGUAL,
+        ExportLayout.THREE_COLUMNS,
+        profile=get_language("Chine"),
+    )
+
+    assert rendered.count("Пиньинь") == 1
+    assert "nǐ hǎo" in rendered
+    assert "你好" not in rendered
+    assert "Перевод" not in rendered
+
+
+def test_japanese_bilingual_columns_use_romaji_instead_of_kanji():
+    rendered = render_export(
+        Document("привет", "こんにちは", "konnichiwa"),
+        ExportKind.BILINGUAL,
+        ExportLayout.THREE_COLUMNS,
+        profile=get_language("Japan"),
+    )
+
+    assert rendered.count("Ромадзи") == 1
+    assert "konnichiwa" in rendered
+    assert "こんにちは" not in rendered
+    assert "Перевод" not in rendered
+
+
+@pytest.mark.parametrize("language", ["English", "French", "Spanish", "Russian"])
+def test_european_bilingual_columns_keep_translation(language):
+    rendered = render_export(
+        Document("исходный", "translated", "transcription"),
+        ExportKind.BILINGUAL,
+        ExportLayout.THREE_COLUMNS,
+        profile=get_language(language),
+    )
+
+    assert rendered.count("Перевод") == 1
+    assert "translated" in rendered
+    assert "transcription" not in rendered
+
+
+def test_chinese_sequential_bilingual_export_keeps_written_translation():
+    rendered = render_export(
+        Document("привет", "你好", "nǐ hǎo"),
+        ExportKind.BILINGUAL,
+        profile=get_language("Chine"),
+    )
+
+    assert "你好" in rendered
+    assert "nǐ hǎo" not in rendered
 
 
 def test_fixed_width_table_wraps_long_multilingual_cells_without_mixing():

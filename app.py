@@ -1319,6 +1319,7 @@ class MainWindow(QMainWindow):
                 export_kind,
                 self.audio_path,
                 layout=export_layout,
+                profile=self.current_language,
             )
             self._remember_directory("last_export_directory", target.parent)
             if export_kind in {ExportKind.FULL, ExportKind.LEARNING_KIT}:
@@ -1384,6 +1385,8 @@ class MainWindow(QMainWindow):
         )
         columns_checkbox.setToolTip(
             "В зависимости от режима выводится одна, две или три колонки. "
+            "Для Chine и Japan в двухколоночном режиме выводятся соответственно "
+            "пиньинь и ромадзи вместо иероглифов. "
             "Если выключено, данные сохраняются последовательными разделами."
         )
         form.addRow("Макет документа:", columns_checkbox)

@@ -8,6 +8,7 @@ from enum import StrEnum
 from pathlib import Path
 
 from .errors import StorageError
+from .languages import LanguageProfile
 from .models import Document
 from .storage import ORIGINAL_MARKER, TRANSLATION_MARKER, serialize_document
 
@@ -33,7 +34,7 @@ class ExportLayout(StrEnum):
 EXPORT_LABELS = {
     ExportKind.FULL: "Полный документ: оригинал + перевод + транскрипция",
     ExportKind.TRANSLATION: "Только перевод",
-    ExportKind.BILINGUAL: "Двуязычный документ: оригинал + перевод",
+    ExportKind.BILINGUAL: "Двуязычный документ: оригинал + перевод/транскрипция",
     ExportKind.LEARNING_KIT: "Учебный комплект: полный TXT + MP3",
 }
 
@@ -114,6 +115,8 @@ def render_columns(
     document: Document,
     kind: ExportKind,
     block_size: int = 10,
+    *,
+    profile: LanguageProfile | None = None,
 ) -> str:
     if block_size <= 0:
         raise ValueError("block_size must be greater than zero")
@@ -127,9 +130,17 @@ def render_columns(
     if kind == ExportKind.TRANSLATION:
         definitions = [("Перевод", document.translation)]
     elif kind == ExportKind.BILINGUAL:
+        secondary_header = "Перевод"
+        secondary_text = document.translation
+        if profile and profile.transcription_mode == "pinyin":
+            secondary_header = "Пиньинь"
+            secondary_text = document.transcription
+        elif profile and profile.transcription_mode == "romaji":
+            secondary_header = "Ромадзи"
+            secondary_text = document.transcription
         definitions = [
             ("Исходный текст", document.original),
-            ("Перевод", document.translation),
+            (secondary_header, secondary_text),
         ]
     else:
         definitions = [
@@ -191,9 +202,11 @@ def render_export(
     document: Document,
     kind: ExportKind,
     layout: ExportLayout = ExportLayout.SEQUENTIAL,
+    *,
+    profile: LanguageProfile | None = None,
 ) -> str:
     if layout == ExportLayout.THREE_COLUMNS:
-        return render_columns(document, kind)
+        return render_columns(document, kind, profile=profile)
     if kind == ExportKind.TRANSLATION:
         return f"{document.translation.rstrip()}\n"
     if kind == ExportKind.BILINGUAL:
@@ -211,6 +224,7 @@ def export_document(
     audio_source: Path | None = None,
     *,
     layout: ExportLayout = ExportLayout.SEQUENTIAL,
+    profile: LanguageProfile | None = None,
 ) -> ExportResult:
     if kind == ExportKind.LEARNING_KIT and (
         audio_source is None or not audio_source.is_file()
@@ -219,7 +233,7 @@ def export_document(
 
     try:
         path.write_text(
-            render_export(document, kind, layout),
+            render_export(document, kind, layout, profile=profile),
             encoding="utf-8",
             newline="\n",
         )
