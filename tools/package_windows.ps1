@@ -72,6 +72,8 @@ try {
     $requiredEntries = @(
         "VoiceGun/VoiceGun.exe",
         "VoiceGun/_internal/",
+        "VoiceGun/_internal/docs/USER_GUIDE_EN.md",
+        "VoiceGun/_internal/docs/USER_GUIDE_RU.md",
         "VoiceGun/language_data/README.txt"
     )
     $entryNames = $zip.Entries.FullName -replace '\\', '/'

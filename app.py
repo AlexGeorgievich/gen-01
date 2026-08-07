@@ -37,9 +37,11 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QProgressBar,
     QPushButton,
+    QSizePolicy,
     QSpinBox,
     QSplitter,
     QStatusBar,
+    QTextBrowser,
     QTextEdit,
     QVBoxLayout,
     QWidget,
@@ -49,12 +51,12 @@ from gpt01.audio_cache import LineAudioCache
 from gpt01.batch import BatchProcessor, BatchResult
 from gpt01.errors import AppError
 from gpt01.exporting import (
-    EXPORT_LABELS,
     ExportKind,
     ExportLayout,
     export_document,
 )
 from gpt01.french_grammar import FrenchArticleMode
+from gpt01.i18n import ui_text
 from gpt01.language_controller import LanguageController
 from gpt01.languages import LANGUAGES
 from gpt01.models import Document, SubtitleCue, TranslationRow
@@ -82,13 +84,6 @@ from gpt01.version import (
 APP_TITLE = APP_DISPLAY_NAME
 VOICE_LOAD_TIMEOUT_SECONDS = 15
 TTS_TIMEOUT_SECONDS = 90
-OPEN_FILTER = (
-    "Поддерживаемые документы (*.txt *.docx *.srt);;"
-    "Текстовые файлы (*.txt);;Документы Word (*.docx);;"
-    "Субтитры SubRip (*.srt);;Все файлы (*.*)"
-)
-TEXT_FILTER = "Текстовые файлы (*.txt);;Все файлы (*.*)"
-SRT_FILTER = "Субтитры SubRip (*.srt);;Все файлы (*.*)"
 APPLICATION_ROOT = (
     Path(sys.executable).resolve().parent
     if getattr(sys, "frozen", False)
@@ -96,6 +91,10 @@ APPLICATION_ROOT = (
 )
 BUNDLE_ROOT = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent))
 APP_ICON_PATH = BUNDLE_ROOT / "assets" / "gpt01.svg"
+HELP_PATHS = {
+    "en": BUNDLE_ROOT / "docs" / "USER_GUIDE_EN.md",
+    "ru": BUNDLE_ROOT / "docs" / "USER_GUIDE_RU.md",
+}
 SMOKE_TEST_MODE = "--smoke-test" in sys.argv
 LOG_PATH = (
     Path(tempfile.gettempdir()) / "voicegun_smoke.log"
@@ -150,24 +149,24 @@ class MainWindow(QMainWindow):
         self.tts_settings = TtsSettings()
 
         self.source_edit = QTextEdit()
-        self.source_edit.setPlaceholderText("Введите или откройте исходный текст…")
+        self.source_edit.setPlaceholderText(self._t("source_placeholder"))
         self.source_edit.viewport().setMouseTracking(True)
         self.source_edit.viewport().installEventFilter(self)
         self.translation_edit = QTextEdit()
-        self.translation_edit.setPlaceholderText("Здесь появится перевод…")
+        self.translation_edit.setPlaceholderText(self._t("translation_placeholder"))
         self.translation_edit.setAcceptRichText(False)
         self.transcription_edit = QTextEdit()
-        self.transcription_edit.setPlaceholderText("Здесь появится транскрипция…")
+        self.transcription_edit.setPlaceholderText(self._t("transcription_placeholder"))
         self.transcription_edit.setAcceptRichText(False)
 
-        self.source_title = QLabel("Исходный текст")
-        self.translation_title = QLabel("Перевод")
-        self.transcription_title = QLabel("Транскрипция")
+        self.source_title = QLabel(self._t("source_text"))
+        self.translation_title = QLabel(self._t("translation"))
+        self.transcription_title = QLabel(self._t("transcription"))
         for title in (self.source_title, self.translation_title, self.transcription_title):
             title.setStyleSheet("font-weight: 600;")
-        self.source_clear_button = QPushButton("Очистка")
-        self.translation_clear_button = QPushButton("Очистка")
-        self.transcription_clear_button = QPushButton("Очистка")
+        self.source_clear_button = QPushButton(self._t("clear"))
+        self.translation_clear_button = QPushButton(self._t("clear"))
+        self.transcription_clear_button = QPushButton(self._t("clear"))
         for button in (
             self.source_clear_button,
             self.translation_clear_button,
@@ -175,43 +174,42 @@ class MainWindow(QMainWindow):
         ):
             button.setMaximumWidth(90)
 
-        self.open_button = QPushButton("Открыть…")
-        self.batch_button = QPushButton("Пакет…")
-        self.translate_button = QPushButton("Перевести")
-        self.speak_button = QPushButton("Озвучить")
-        self.replay_button = QPushButton("Повторить")
+        self.open_button = QPushButton(self._t("open"))
+        self.batch_button = QPushButton(self._t("batch"))
+        self.translate_button = QPushButton(self._t("translate"))
+        self.speak_button = QPushButton(self._t("speak"))
+        self.replay_button = QPushButton(self._t("replay"))
         self.replay_button.setEnabled(False)
-        self.stop_button = QPushButton("Стоп")
+        self.stop_button = QPushButton(self._t("stop"))
         self.stop_button.setEnabled(False)
-        self.cancel_button = QPushButton("Отменить операцию")
+        self.cancel_button = QPushButton(self._t("cancel_operation"))
         self.cancel_button.setEnabled(False)
-        self.save_audio_button = QPushButton("Сохранить MP3…")
+        self.save_audio_button = QPushButton(self._t("save_mp3"))
         self.save_audio_button.setEnabled(False)
-        self.save_button = QPushButton("Сохранить текст…")
-        self.settings_button = QPushButton("Setting")
+        self.save_button = QPushButton(self._t("save_text"))
+        self.settings_button = QPushButton(self._t("settings"))
+        self.help_button = QPushButton(self._t("help"))
 
         self.language_combo = QComboBox()
         self.voice_combo = QComboBox()
         self.voice_status = QLabel()
         self.voice_status.setWordWrap(True)
-        self.reload_voices_button = QPushButton("Обновить список голосов из сети")
+        self.reload_voices_button = QPushButton(self._t("refresh_voices"))
         self.transcription_toggle_button = QPushButton("−")
-        self.transcription_toggle_button.setToolTip("Скрыть окно транскрипции")
+        self.transcription_toggle_button.setToolTip(self._t("hide_transcription"))
         self.transcription_toggle_button.setFixedWidth(32)
         self.translation_toggle_button = QPushButton("−")
-        self.translation_toggle_button.setToolTip("Скрыть окно перевода")
+        self.translation_toggle_button.setToolTip(self._t("hide_translation"))
         self.translation_toggle_button.setFixedWidth(32)
         self.mark_a_button = QPushButton("A")
-        self.mark_a_button.setToolTip("Зафиксировать строку под указателем как метку A")
+        self.mark_a_button.setToolTip(self._t("mark_a_tip"))
         self.mark_b_button = QPushButton("B")
-        self.mark_b_button.setToolTip("Зафиксировать строку под указателем как метку B")
+        self.mark_b_button.setToolTip(self._t("mark_b_tip"))
         self.play_ab_button = QPushButton("A–B")
-        self.play_ab_button.setToolTip("Озвучить строки между метками A и B")
+        self.play_ab_button.setToolTip(self._t("play_ab_tip"))
         self.play_ab_button.setEnabled(False)
-        self.reset_ab_button = QPushButton("Сброс")
-        self.reset_ab_button.setToolTip(
-            "Остановить A–B, удалить метки и очистить аудиокэш диапазона"
-        )
+        self.reset_ab_button = QPushButton(self._t("reset"))
+        self.reset_ab_button.setToolTip(self._t("reset_ab_tip"))
         self.reset_ab_button.setEnabled(False)
         for button in (
             self.mark_a_button,
@@ -228,17 +226,24 @@ class MainWindow(QMainWindow):
         cached_voices = self._load_cached_voices()
         self._populate_voices(cached_voices)
         if self.repository.voice_cache_path(self.current_language).exists():
-            self.voice_status.setText(f"Загружено голосов из кэша: {len(cached_voices)}")
+            self.voice_status.setText(self._t("cached_voices", count=len(cached_voices)))
         else:
-            self.voice_status.setText("Доступны встроенные голоса.")
+            self.voice_status.setText(self._t("built_in_voices"))
         self._update_language_labels()
         self._restore_app_state()
         self._apply_editor_font_size()
         self._update_ab_controls()
+        self._apply_interface_language()
 
     @property
     def current_language(self):
         return self.language_controller.profile
+
+    def _t(self, key: str, **values: object) -> str:
+        return ui_text(self.preferences.interface_language, key, **values)
+
+    def _language_label(self, key: str) -> str:
+        return self._t(f"language_{key}")
 
     @property
     def translator(self):
@@ -256,7 +261,7 @@ class MainWindow(QMainWindow):
         self.language_combo.clear()
         selected_index = 0
         for index, profile in enumerate(LANGUAGES):
-            self.language_combo.addItem(profile.label, profile.key)
+            self.language_combo.addItem(self._language_label(profile.key), profile.key)
             if profile.key == self.current_language.key:
                 selected_index = index
         self.language_combo.setCurrentIndex(selected_index)
@@ -292,17 +297,63 @@ class MainWindow(QMainWindow):
             LOGGER.warning("Could not save recent directory: %s", directory)
 
     def _update_language_labels(self) -> None:
-        self.translation_title.setText(f"Перевод — {self.current_language.label}")
-        mode_names = {
-            "pinyin": "пиньинь",
-            "romaji": "ромадзи",
+        self.translation_title.setText(
+            f"{self._t('translation')} — {self._language_label(self.current_language.key)}"
+        )
+        mode_names_en = {
+            "pinyin": "Pinyin",
+            "romaji": "Romaji",
             "ipa_en": "IPA (English)",
             "ipa_fr": "IPA (French)",
             "ipa_es": "IPA (Spanish)",
             "ipa_ru": "IPA (Russian)",
         }
+        mode_names_ru = {**mode_names_en, "pinyin": "пиньинь", "romaji": "ромадзи"}
+        mode_names = (
+            mode_names_ru if self.preferences.interface_language == "ru" else mode_names_en
+        )
         mode_name = mode_names[self.current_language.transcription_mode]
-        self.transcription_title.setText(f"Транскрипция — {mode_name}")
+        self.transcription_title.setText(f"{self._t('transcription')} — {mode_name}")
+
+    def _apply_interface_language(self) -> None:
+        self.setWindowTitle(self._t("app_title"))
+        self.source_edit.setPlaceholderText(self._t("source_placeholder"))
+        self.translation_edit.setPlaceholderText(self._t("translation_placeholder"))
+        self.transcription_edit.setPlaceholderText(self._t("transcription_placeholder"))
+        self.source_title.setText(self._t("source_text"))
+        self.open_button.setText(self._t("open"))
+        self.batch_button.setText(self._t("batch"))
+        self.translate_button.setText(self._t("translate"))
+        self.speak_button.setText(self._t("speak"))
+        self.replay_button.setText(self._t("replay"))
+        self.stop_button.setText(self._t("stop"))
+        self.cancel_button.setText(self._t("cancel_operation"))
+        self.save_audio_button.setText(self._t("save_mp3"))
+        self.save_button.setText(self._t("save_text"))
+        self.settings_button.setText(self._t("settings"))
+        self.help_button.setText(self._t("help"))
+        for button in (
+            self.source_clear_button,
+            self.translation_clear_button,
+            self.transcription_clear_button,
+        ):
+            button.setText(self._t("clear"))
+        self.voice_box.setTitle(self._t("language_and_voice"))
+        self.language_label.setText(self._t("language"))
+        self.voice_label.setText(self._t("voice"))
+        self.reload_voices_button.setText(self._t("refresh_voices"))
+        self.range_control_label.setText(self._t("playback_range"))
+        self.mark_a_button.setToolTip(self._t("mark_a_tip"))
+        self.mark_b_button.setToolTip(self._t("mark_b_tip"))
+        self.play_ab_button.setToolTip(self._t("play_ab_tip"))
+        self.reset_ab_button.setText(self._t("reset"))
+        self.reset_ab_button.setToolTip(self._t("reset_ab_tip"))
+        self._populate_languages()
+        cached_voices = self._load_cached_voices()
+        self.voice_status.setText(self._t("cached_voices", count=len(cached_voices)))
+        self._update_language_labels()
+        self._set_translation_window_visible(not self.translation_box.isHidden())
+        self._set_transcription_window_visible(not self.transcription_box.isHidden())
 
     @Slot()
     def _on_language_changed(self) -> None:
@@ -328,10 +379,11 @@ class MainWindow(QMainWindow):
             self._populate_voices(self._load_cached_voices())
             self._restore_app_state()
             self.repository.save_selected_language(profile.key)
-            self.voice_status.setText(f"Выбран язык: {profile.label}")
+            voices = self._load_cached_voices()
+            self.voice_status.setText(self._t("cached_voices", count=len(voices)))
         except OSError as exc:
             LOGGER.exception("Could not switch language")
-            self._show_error(f"Не удалось переключить язык: {exc}")
+            self._show_error(str(exc))
         finally:
             self._switching_language = False
 
@@ -339,7 +391,7 @@ class MainWindow(QMainWindow):
         return self.repository.load_voices(self.current_language)
 
     def _build_ui(self) -> None:
-        toolbar = self.addToolBar("Команды")
+        toolbar = self.addToolBar("Commands")
         toolbar.setMovable(False)
         toolbar.addWidget(self.open_button)
         toolbar.addWidget(self.batch_button)
@@ -354,9 +406,17 @@ class MainWindow(QMainWindow):
         toolbar.addWidget(self.save_button)
         toolbar.addSeparator()
         toolbar.addWidget(self.settings_button)
+        toolbar_spacer = QWidget()
+        toolbar_spacer.setSizePolicy(
+            QSizePolicy.Policy.Expanding,
+            QSizePolicy.Policy.Preferred,
+        )
+        toolbar.addWidget(toolbar_spacer)
+        toolbar.addWidget(self.help_button)
 
-        source_box = QGroupBox()
-        source_layout = QVBoxLayout(source_box)
+        self.source_box = QGroupBox()
+        self.source_box.setObjectName("sourcePanel")
+        source_layout = QVBoxLayout(self.source_box)
         source_header = QHBoxLayout()
         source_header.addWidget(self.source_title)
         source_header.addStretch(1)
@@ -365,59 +425,84 @@ class MainWindow(QMainWindow):
         source_layout.addWidget(self.source_edit)
 
         self.translation_box = QGroupBox()
+        self.translation_box.setObjectName("translationPanel")
         translation_layout = QVBoxLayout(self.translation_box)
-        translation_header = QHBoxLayout()
-        translation_header.addWidget(self.translation_title)
-        translation_header.addStretch(1)
-        translation_header.addWidget(self.translation_clear_button)
-        translation_layout.addLayout(translation_header)
+        self.translation_header = QHBoxLayout()
+        self.translation_header.addWidget(self.translation_title)
+        self.translation_header.addStretch(1)
+        self.translation_header.addWidget(self.translation_toggle_button)
+        self.translation_header.addWidget(self.translation_clear_button)
+        translation_layout.addLayout(self.translation_header)
         translation_layout.addWidget(self.translation_edit)
 
         self.transcription_box = QGroupBox()
+        self.transcription_box.setObjectName("transcriptionPanel")
         transcription_layout = QVBoxLayout(self.transcription_box)
-        transcription_header = QHBoxLayout()
-        transcription_header.addWidget(self.transcription_title)
-        transcription_header.addStretch(1)
-        transcription_header.addWidget(self.transcription_clear_button)
-        transcription_layout.addLayout(transcription_header)
+        self.transcription_header = QHBoxLayout()
+        self.transcription_header.addWidget(self.transcription_title)
+        self.transcription_header.addStretch(1)
+        self.transcription_header.addWidget(self.transcription_toggle_button)
+        self.transcription_header.addWidget(self.transcription_clear_button)
+        transcription_layout.addLayout(self.transcription_header)
         transcription_layout.addWidget(self.transcription_edit)
 
         self.editors = QSplitter()
-        self.editors.addWidget(source_box)
+        self.editors.addWidget(self.source_box)
         self.editors.addWidget(self.translation_box)
         self.editors.addWidget(self.transcription_box)
         self.editors.setSizes([420, 420, 420])
+        self.editors.setHandleWidth(7)
 
         window_controls = QHBoxLayout()
-        self.transcription_control_label = QLabel("Транскрипции:")
-        self.translation_control_label = QLabel("Перевод:")
-        window_controls.addWidget(self.transcription_control_label)
-        window_controls.addWidget(self.transcription_toggle_button)
-        window_controls.addSpacing(16)
-        window_controls.addWidget(self.translation_control_label)
-        window_controls.addWidget(self.translation_toggle_button)
-        window_controls.addSpacing(16)
+        self.collapsed_panels_layout = QHBoxLayout()
+        window_controls.addLayout(self.collapsed_panels_layout)
+        self.range_control_label = QLabel(self._t("playback_range"))
+        self.range_control_label.setStyleSheet("font-weight: 600;")
+        window_controls.addWidget(self.range_control_label)
         window_controls.addWidget(self.mark_a_button)
         window_controls.addWidget(self.mark_b_button)
         window_controls.addWidget(self.play_ab_button)
         window_controls.addWidget(self.reset_ab_button)
         window_controls.addStretch(1)
 
-        voice_box = QGroupBox("Язык и голос Microsoft TTS")
-        voice_box_layout = QHBoxLayout(voice_box)
-        voice_box_layout.addWidget(QLabel("Язык:"))
+        self.voice_box = QGroupBox(self._t("language_and_voice"))
+        voice_box_layout = QHBoxLayout(self.voice_box)
+        voice_box_layout.setContentsMargins(10, 8, 10, 8)
+        self.language_label = QLabel(self._t("language"))
+        self.voice_label = QLabel(self._t("voice"))
+        voice_box_layout.addWidget(self.language_label)
         voice_box_layout.addWidget(self.language_combo)
-        voice_box_layout.addWidget(QLabel("Голос:"))
+        voice_box_layout.addWidget(self.voice_label)
         voice_box_layout.addWidget(self.voice_combo, 1)
         voice_box_layout.addWidget(self.voice_status)
         voice_box_layout.addWidget(self.reload_voices_button)
+        self.language_combo.setMinimumWidth(105)
+        self.voice_status.setMaximumWidth(245)
 
         central = QWidget()
+        central.setObjectName("centralWorkspace")
         layout = QVBoxLayout(central)
-        layout.addWidget(voice_box)
+        layout.setContentsMargins(8, 8, 8, 6)
+        layout.setSpacing(7)
+        layout.addWidget(self.voice_box)
         layout.addLayout(window_controls)
         layout.addWidget(self.editors, 1)
         self.setCentralWidget(central)
+        central.setStyleSheet(
+            "QGroupBox#sourcePanel { background: #f7f9fc; border: 1px solid #cfd7e3; "
+            "border-radius: 7px; }"
+            "QGroupBox#translationPanel { background: #f2f8ff; border: 1px solid #bfd5ec; "
+            "border-radius: 7px; }"
+            "QGroupBox#transcriptionPanel { background: #f4faf6; border: 1px solid #c4ddcc; "
+            "border-radius: 7px; }"
+            "QTextEdit { background: white; border: 1px solid #d7dce2; border-radius: 5px; "
+            "padding: 4px; }"
+        )
+        self.translate_button.setStyleSheet(
+            "QPushButton { background: #1769d2; color: white; font-weight: 600; "
+            "padding: 4px 12px; border: 1px solid #135bb8; border-radius: 4px; }"
+            "QPushButton:disabled { background: #a9bfdc; border-color: #a9bfdc; }"
+        )
 
         status = QStatusBar()
         self.progress = QProgressBar()
@@ -426,7 +511,7 @@ class MainWindow(QMainWindow):
         self.progress.hide()
         status.addPermanentWidget(self.progress)
         self.setStatusBar(status)
-        self.statusBar().showMessage("Готово")
+        self.statusBar().showMessage(self._t("ready"))
 
     def _connect_signals(self) -> None:
         self.open_button.clicked.connect(self.open_file)
@@ -439,6 +524,7 @@ class MainWindow(QMainWindow):
         self.save_audio_button.clicked.connect(self.save_audio)
         self.save_button.clicked.connect(self.save_file)
         self.settings_button.clicked.connect(self.open_settings)
+        self.help_button.clicked.connect(self.open_help)
         self.reload_voices_button.clicked.connect(self.load_voices)
         self.transcription_toggle_button.clicked.connect(self._toggle_transcription_window)
         self.translation_toggle_button.clicked.connect(self._toggle_translation_window)
@@ -461,22 +547,33 @@ class MainWindow(QMainWindow):
         self.ab_repeat_shortcut.activated.connect(self.repeat_ab_range)
         self.open_shortcut = QShortcut(QKeySequence("Ctrl+O"), self)
         self.open_shortcut.activated.connect(self.open_file)
+        self.help_shortcut = QShortcut(QKeySequence("F1"), self)
+        self.help_shortcut.activated.connect(self.open_help)
         self.player.playbackStateChanged.connect(self._playback_changed)
         self.player.mediaStatusChanged.connect(self._media_status_changed)
         self.player.errorOccurred.connect(
-            lambda _error, message: self._show_error(f"Ошибка воспроизведения: {message}")
+            lambda _error, message: self._show_error(
+                self._t("playback_error", message=message)
+            )
         )
 
     @Slot()
     def open_settings(self) -> None:
         dialog = QDialog(self)
-        dialog.setWindowTitle("Setting")
+        dialog.setWindowTitle(self._t("settings_title"))
+        dialog.setMinimumWidth(440)
         form = QFormLayout(dialog)
 
+        interface_combo = QComboBox(dialog)
+        interface_combo.addItem("English", "en")
+        interface_combo.addItem("Русский", "ru")
+        interface_index = interface_combo.findData(self.preferences.interface_language)
+        interface_combo.setCurrentIndex(max(0, interface_index))
+
         source_combo = QComboBox(dialog)
-        source_combo.addItem("Автоопределение", "auto")
+        source_combo.addItem(self._t("auto_detect"), "auto")
         for profile in LANGUAGES:
-            source_combo.addItem(profile.label, profile.key)
+            source_combo.addItem(self._language_label(profile.key), profile.key)
         source_index = source_combo.findData(self.preferences.source_language_key)
         source_combo.setCurrentIndex(max(0, source_index))
 
@@ -486,13 +583,13 @@ class MainWindow(QMainWindow):
         font_size.setValue(self.preferences.editor_font_size)
 
         french_articles = QComboBox(dialog)
-        french_articles.addItem("Автоматически (учебная форма)", FrenchArticleMode.AUTO.value)
-        french_articles.addItem("Определённые: le, la, l’, les", FrenchArticleMode.DEFINITE.value)
+        french_articles.addItem(self._t("articles_auto"), FrenchArticleMode.AUTO.value)
+        french_articles.addItem(self._t("articles_definite"), FrenchArticleMode.DEFINITE.value)
         french_articles.addItem(
-            "Неопределённые: un, une, des",
+            self._t("articles_indefinite"),
             FrenchArticleMode.INDEFINITE.value,
         )
-        french_articles.addItem("Не добавлять", FrenchArticleMode.OFF.value)
+        french_articles.addItem(self._t("articles_off"), FrenchArticleMode.OFF.value)
         article_index = french_articles.findData(self.preferences.french_article_mode)
         french_articles.setCurrentIndex(max(0, article_index))
 
@@ -511,12 +608,13 @@ class MainWindow(QMainWindow):
         speech_volume.setSuffix(" %")
         speech_volume.setValue(self.tts_settings.volume)
 
-        form.addRow("Базовый язык первого окна:", source_combo)
-        form.addRow("Размер шрифта текстовых окон:", font_size)
-        form.addRow("Французские артикли:", french_articles)
-        form.addRow("Скорость TTS:", speech_rate)
-        form.addRow("Высота тона TTS:", speech_pitch)
-        form.addRow("Громкость синтеза TTS:", speech_volume)
+        form.addRow(self._t("interface_language"), interface_combo)
+        form.addRow(self._t("source_language"), source_combo)
+        form.addRow(self._t("font_size"), font_size)
+        form.addRow(self._t("french_articles"), french_articles)
+        form.addRow(self._t("tts_rate"), speech_rate)
+        form.addRow(self._t("tts_pitch"), speech_pitch)
+        form.addRow(self._t("tts_volume"), speech_volume)
 
         buttons = QDialogButtonBox(
             QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel,
@@ -535,6 +633,7 @@ class MainWindow(QMainWindow):
             french_article_mode=str(french_articles.currentData()),
             last_open_directory=self.preferences.last_open_directory,
             last_export_directory=self.preferences.last_export_directory,
+            interface_language=str(interface_combo.currentData()),
         )
         updated_tts_settings = TtsSettings.normalized(
             speech_rate.value(), speech_pitch.value(), speech_volume.value()
@@ -546,14 +645,36 @@ class MainWindow(QMainWindow):
         )
         self.language_controller.select_source(self.preferences.source_language_key)
         self._apply_editor_font_size()
+        self._apply_interface_language()
         if tts_changed or previous_article_mode != self.preferences.french_article_mode:
             self._reset_audio_state()
         try:
             self.repository.save_preferences(self.preferences)
             self._save_app_state()
-            self.statusBar().showMessage("Настройки сохранены.")
+            self.statusBar().showMessage(self._t("settings_saved"))
         except OSError as exc:
-            self._show_error(f"Не удалось сохранить настройки: {exc}")
+            self._show_error(self._t("settings_save_failed", error=exc))
+
+    @Slot()
+    def open_help(self) -> None:
+        dialog = QDialog(self)
+        dialog.setWindowTitle(self._t("help_title"))
+        dialog.resize(820, 680)
+        layout = QVBoxLayout(dialog)
+        browser = QTextBrowser(dialog)
+        help_path = HELP_PATHS[self.preferences.interface_language]
+        try:
+            browser.setMarkdown(help_path.read_text(encoding="utf-8"))
+        except OSError:
+            browser.setPlainText(self._t("help_unavailable", path=help_path))
+        layout.addWidget(browser, 1)
+        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Close, parent=dialog)
+        close_button = buttons.button(QDialogButtonBox.StandardButton.Close)
+        if close_button:
+            close_button.setText(self._t("close"))
+        buttons.rejected.connect(dialog.reject)
+        layout.addWidget(buttons)
+        dialog.exec()
 
     def _run_task(
         self,
@@ -565,7 +686,7 @@ class MainWindow(QMainWindow):
         self._set_busy(True, busy_text)
 
         def _finished() -> None:
-            self._set_busy(False, "Готово")
+            self._set_busy(False, self._t("ready"))
 
         self.tasks.start(fn, on_result, on_error or self._show_error, _finished)
 
@@ -582,7 +703,7 @@ class MainWindow(QMainWindow):
         self._set_busy(True, busy_text, determinate=True)
 
         def _finished() -> None:
-            self._set_busy(False, "Готово")
+            self._set_busy(False, self._t("ready"))
 
         self.tasks.start_with_progress(
             fn,
@@ -633,9 +754,9 @@ class MainWindow(QMainWindow):
             return
         filename, _ = QFileDialog.getOpenFileName(
             self,
-            "Открыть текст",
+            self._t("open_text"),
             self._open_dialog_directory(),
-            OPEN_FILTER,
+            self._t("documents_filter"),
         )
         if not filename:
             return
@@ -652,7 +773,7 @@ class MainWindow(QMainWindow):
             self._dirty = False
             self.current_source_path = Path(filename)
             self._remember_directory("last_open_directory", self.current_source_path.parent)
-            self.statusBar().showMessage(f"Открыт: {filename}")
+            self.statusBar().showMessage(self._t("opened", path=filename))
         except AppError as exc:
             self._loading_document = False
             self._show_error(str(exc))
@@ -661,9 +782,9 @@ class MainWindow(QMainWindow):
     def batch_process_files(self) -> None:
         filenames, _ = QFileDialog.getOpenFileNames(
             self,
-            "Выберите документы для пакетного перевода",
+            self._t("select_batch"),
             self._open_dialog_directory(),
-            OPEN_FILTER,
+            self._t("documents_filter"),
         )
         if not filenames:
             return
@@ -680,7 +801,7 @@ class MainWindow(QMainWindow):
         self._run_progress_task(
             process,
             self._batch_completed,
-            f"Пакетный перевод: 0 из {len(paths)}",
+            self._t("batch_progress", total=len(paths)),
         )
 
     def _batch_completed(self, result: BatchResult) -> None:
@@ -688,23 +809,23 @@ class MainWindow(QMainWindow):
         failed = result.failed
         if succeeded and succeeded[-1].output:
             self._remember_directory("last_export_directory", succeeded[-1].output.parent)
-        summary = f"Успешно: {len(succeeded)} из {len(result.items)}."
+        summary = self._t("batch_success", count=len(succeeded), total=len(result.items))
         if failed:
             details = "\n".join(
                 f"• {item.source.name}: {item.error}" for item in failed[:5]
             )
             if len(failed) > 5:
-                details += f"\n…и ещё ошибок: {len(failed) - 5}"
+                details += "\n" + self._t("more_errors", count=len(failed) - 5)
             QMessageBox.warning(
                 self,
-                APP_TITLE,
-                f"Пакетная обработка завершена.\n\n{summary}\n\n{details}",
+                self.windowTitle(),
+                f"{self._t('batch_complete')}\n\n{summary}\n\n{details}",
             )
         else:
             QMessageBox.information(
                 self,
-                APP_TITLE,
-                f"Пакетная обработка завершена.\n\n{summary}",
+                self.windowTitle(),
+                f"{self._t('batch_complete')}\n\n{summary}",
             )
         self.statusBar().showMessage(summary)
 
@@ -712,7 +833,7 @@ class MainWindow(QMainWindow):
     def translate_text(self) -> None:
         text = self.source_edit.toPlainText()
         if not text.strip():
-            QMessageBox.information(self, APP_TITLE, "Введите исходный текст.")
+            QMessageBox.information(self, self.windowTitle(), self._t("enter_source"))
             return
 
         def translate(
@@ -726,20 +847,24 @@ class MainWindow(QMainWindow):
                 lambda current, total: report(
                     current,
                     total,
-                    f"Перевод: обработано частей {current} из {total}",
+                    self._t("translation_progress", current=current, total=total),
                 ),
             )
 
         self._run_progress_task(
             translate,
             self._set_structured_translation,
-            "Подготовка структурированного перевода…",
+            self._t("translation_preparing"),
         )
 
     def _set_structured_translation(self, result: StructuredTranslationResult) -> None:
         self._set_translation(result.text)
         self.statusBar().showMessage(
-            f"Переведено строк: {result.translated_lines}; частей: {result.translated_chunks}."
+            self._t(
+                "translation_complete",
+                lines=result.translated_lines,
+                parts=result.translated_chunks,
+            )
         )
 
     @Slot()
@@ -756,7 +881,7 @@ class MainWindow(QMainWindow):
         self.reload_voices_button.setEnabled(False)
         self.language_combo.setEnabled(False)
         self.voice_status.setText(
-            f"Обновление списка голосов (не более {VOICE_LOAD_TIMEOUT_SECONDS} секунд)…"
+            self._t("refreshing_voices", seconds=VOICE_LOAD_TIMEOUT_SECONDS)
         )
         def _finished() -> None:
             self.reload_voices_button.setEnabled(True)
@@ -780,24 +905,18 @@ class MainWindow(QMainWindow):
             except OSError:
                 pass
             self._populate_voices(voices)
-            self.voice_status.setText(f"Загружено голосов из сети: {len(voices)} (сохранено в кэш)")
+            self.voice_status.setText(self._t("network_voices", count=len(voices)))
         else:
-            self.voice_status.setText(
-                "Сервис не вернул голоса выбранного языка. "
-                "Используется сохранённый список."
-            )
+            self.voice_status.setText(self._t("voice_service_empty"))
 
     @Slot(str)
     def _voices_load_failed(self, message: str) -> None:
         if isinstance(message, str) and message.strip():
             short_message = message.strip().splitlines()[0][:140]
         else:
-            short_message = "превышено время ожидания"
-        self.voice_status.setText(
-            "Не удалось обновить список. Используются сохранённые голоса.\n"
-            f"Причина: {short_message}"
-        )
-        self.statusBar().showMessage("Готово — Microsoft TTS временно недоступен")
+            short_message = self._t("timeout")
+        self.voice_status.setText(self._t("voice_refresh_failed", reason=short_message))
+        self.statusBar().showMessage(self._t("tts_unavailable"))
 
     def _populate_voices(self, voices: list[dict[str, Any]]) -> None:
         self.voice_combo.blockSignals(True)
@@ -831,11 +950,11 @@ class MainWindow(QMainWindow):
         voice = self.selected_voice()
         if not text:
             QMessageBox.information(
-                self, APP_TITLE, "Сначала переведите или введите текст перевода."
+                self, self.windowTitle(), self._t("need_translation")
             )
             return
         if not voice:
-            QMessageBox.information(self, APP_TITLE, "Выберите голос.")
+            QMessageBox.information(self, self.windowTitle(), self._t("select_voice"))
             return
         tts_settings = self.tts_settings
         speech_text = self.language_controller.prepare_speech(text)
@@ -857,9 +976,7 @@ class MainWindow(QMainWindow):
             )
             return str(output)
 
-        self._run_task(
-            synthesize, self._play_file, "Синтез речи…"
-        )
+        self._run_task(synthesize, self._play_file, self._t("synthesizing"))
 
     @Slot()
     def speak_line_at_cursor(self) -> None:
@@ -888,12 +1005,12 @@ class MainWindow(QMainWindow):
         line_number = cursor.blockNumber()
 
         if not line_text:
-            self.statusBar().showMessage("Строка под указателем пуста.")
+            self.statusBar().showMessage(self._t("empty_hover_line"))
             return
 
         voice = self.selected_voice()
         if not voice:
-            QMessageBox.information(self, APP_TITLE, "Выберите голос.")
+            QMessageBox.information(self, self.windowTitle(), self._t("select_voice"))
             return
         tts_settings = self.tts_settings
 
@@ -944,11 +1061,13 @@ class MainWindow(QMainWindow):
                 self._dirty = True
             self._audio_line_number = line_number
             self._show_synchronized_line(line_number)
-            self.statusBar().showMessage(f"Строка: {translated_line}")
+            self.statusBar().showMessage(self._t("line_result", text=translated_line))
             self._play_file(filename)
 
         self._run_task(
-            translate_and_synthesize, on_ready, f"Синтез строки: {line_text[:25]}…"
+            translate_and_synthesize,
+            on_ready,
+            self._t("line_synthesis", text=f"{line_text[:25]}…"),
         )
 
     def _play_file(self, filename: str) -> None:
@@ -958,7 +1077,7 @@ class MainWindow(QMainWindow):
         self.player.setSource(QUrl())
         self.player.setSource(QUrl.fromLocalFile(filename))
         self.player.play()
-        self.statusBar().showMessage("Воспроизведение…")
+        self.statusBar().showMessage(self._t("playing"))
         self.replay_button.setEnabled(not self.sequence.active)
         self.save_audio_button.setEnabled(True)
         if (
@@ -1020,21 +1139,43 @@ class MainWindow(QMainWindow):
         self._set_translation_window_visible(self.translation_box.isHidden())
 
     def _set_transcription_window_visible(self, visible: bool) -> None:
+        self.transcription_header.removeWidget(self.transcription_toggle_button)
+        self.collapsed_panels_layout.removeWidget(self.transcription_toggle_button)
+        if visible:
+            self.transcription_header.insertWidget(
+                max(0, self.transcription_header.count() - 1),
+                self.transcription_toggle_button,
+            )
+        else:
+            self.collapsed_panels_layout.addWidget(self.transcription_toggle_button)
         self.transcription_box.setVisible(visible)
-        self.transcription_toggle_button.setText("−" if visible else "+")
+        self.transcription_toggle_button.setFixedWidth(32 if visible else 126)
+        self.transcription_toggle_button.setText(
+            "−" if visible else f"+ {self._t('transcription')}"
+        )
         self.transcription_toggle_button.setToolTip(
-            "Скрыть окно транскрипции"
-            if visible
-            else "Открыть окно транскрипции"
+            self._t("hide_transcription") if visible else self._t("show_transcription")
         )
         if visible:
             self._resize_visible_editor_windows()
 
     def _set_translation_window_visible(self, visible: bool) -> None:
+        self.translation_header.removeWidget(self.translation_toggle_button)
+        self.collapsed_panels_layout.removeWidget(self.translation_toggle_button)
+        if visible:
+            self.translation_header.insertWidget(
+                max(0, self.translation_header.count() - 1),
+                self.translation_toggle_button,
+            )
+        else:
+            self.collapsed_panels_layout.addWidget(self.translation_toggle_button)
         self.translation_box.setVisible(visible)
-        self.translation_toggle_button.setText("−" if visible else "+")
+        self.translation_toggle_button.setFixedWidth(32 if visible else 126)
+        self.translation_toggle_button.setText(
+            "−" if visible else f"+ {self._t('translation')}"
+        )
         self.translation_toggle_button.setToolTip(
-            "Скрыть окно перевода" if visible else "Открыть окно перевода"
+            self._t("hide_translation") if visible else self._t("show_translation")
         )
         if visible:
             self._resize_visible_editor_windows()
@@ -1064,9 +1205,7 @@ class MainWindow(QMainWindow):
         cursor = self.source_edit.textCursor()
         block = cursor.block()
         if not block.isValid():
-            self.statusBar().showMessage(
-                f"Установите курсор на строку исходного текста перед меткой {marker}."
-            )
+            self.statusBar().showMessage(self._t("marker_caret", marker=marker))
             return
         line_number = block.blockNumber()
         if marker == "A":
@@ -1078,7 +1217,9 @@ class MainWindow(QMainWindow):
         self._ab_repeat_ready = False
         self._render_source_highlights()
         self._update_ab_controls()
-        self.statusBar().showMessage(f"Метка {marker}: строка {line_number + 1}.")
+        self.statusBar().showMessage(
+            self._t("marker_set", marker=marker, line=line_number + 1)
+        )
 
     def _reset_range_markers(self) -> None:
         self._range_a_line = None
@@ -1093,12 +1234,12 @@ class MainWindow(QMainWindow):
     @Slot()
     def reset_ab_range(self) -> None:
         if self.sequence.active and self._sequence_scope == "ab":
-            self._stop_sequence("Воспроизведение A–B остановлено.")
+            self._stop_sequence(self._t("range_stopped"))
         elif self.ab_audio_cache.contains(self.audio_path):
             self.stop_audio()
             self.audio_path = None
         self._reset_range_markers()
-        self.statusBar().showMessage("Метки A/B и аудиокэш диапазона сброшены.")
+        self.statusBar().showMessage(self._t("range_reset"))
 
     def _update_ab_controls(self) -> None:
         if not hasattr(self, "mark_a_button"):
@@ -1214,7 +1355,7 @@ class MainWindow(QMainWindow):
             return
         if self.tasks.foreground:
             self.tasks.cancel_foreground()
-            self.statusBar().showMessage("Отмена операции…")
+            self.statusBar().showMessage(self._t("canceling"))
             self.cancel_button.setEnabled(False)
 
     def _reset_audio_state(self) -> None:
@@ -1251,9 +1392,11 @@ class MainWindow(QMainWindow):
                 self.player.setSource(QUrl.fromLocalFile(str(self.audio_path)))
                 self.player.setPosition(0)
                 self.player.play()
-                self.statusBar().showMessage("Повтор сохранённого аудио…")
+                self.statusBar().showMessage(self._t("replay_saved"))
             else:
-                QMessageBox.information(self, APP_TITLE, "Нет строк для озвучивания.")
+                QMessageBox.information(
+                    self, self.windowTitle(), self._t("no_speech_lines")
+                )
             return
         self._begin_sequence(rows, "all")
 
@@ -1269,7 +1412,9 @@ class MainWindow(QMainWindow):
 
     def _start_ab_sequence(self) -> None:
         if self._range_a_line is None or self._range_b_line is None:
-            QMessageBox.information(self, APP_TITLE, "Сначала установите метки A и B.")
+            QMessageBox.information(
+                self, self.windowTitle(), self._t("set_markers_first")
+            )
             return
         rows = rows_between(
             build_translation_rows(
@@ -1283,15 +1428,15 @@ class MainWindow(QMainWindow):
         if not rows:
             QMessageBox.information(
                 self,
-                APP_TITLE,
-                "Между метками A и B нет непустых строк для озвучивания.",
+                self.windowTitle(),
+                self._t("empty_range"),
             )
             return
         self._begin_sequence(rows, "ab")
 
     def _begin_sequence(self, rows: list[TranslationRow], scope: str) -> None:
         if not self.selected_voice():
-            QMessageBox.information(self, APP_TITLE, "Выберите голос.")
+            QMessageBox.information(self, self.windowTitle(), self._t("select_voice"))
             return
 
         self._stop_sequence()
@@ -1338,13 +1483,18 @@ class MainWindow(QMainWindow):
         current, total = self.sequence.progress
         prefix = "A–B · " if self._sequence_scope == "ab" else ""
         self.statusBar().showMessage(
-            f"{prefix}строка {current} из {total}: подготовка…"
+            self._t(
+                "line_preparing",
+                prefix=prefix,
+                current=current,
+                total=total,
+            )
         )
 
         translated_text = row.translation
         voice = self.selected_voice()
         if not voice:
-            self._stop_sequence("Голос не выбран.")
+            self._stop_sequence(self._t("voice_not_selected"))
             return
         tts_settings = self.tts_settings
         use_ab_cache = self._sequence_scope == "ab"
@@ -1412,18 +1562,23 @@ class MainWindow(QMainWindow):
             self._play_file(filename)
             self.stop_button.setEnabled(True)
             self.statusBar().showMessage(
-                f"{prefix}строка {current} из {total}: "
-                f"{'из кэша' if cache_hit else 'воспроизведение'}…"
+                self._t(
+                    "line_playing",
+                    prefix=prefix,
+                    current=current,
+                    total=total,
+                    mode=self._t("from_cache") if cache_hit else self._t("playback"),
+                )
             )
 
         def sequence_error(message: str) -> None:
-            self._stop_sequence("Последовательное озвучивание прервано из-за ошибки.")
+            self._stop_sequence(self._t("sequence_error"))
             self._show_error(message)
 
         self._run_task(
             prepare_line,
             play_line,
-            f"Строка {current} из {total}: синтез…",
+            self._t("line_synthesizing", current=current, total=total),
             sequence_error,
         )
 
@@ -1457,11 +1612,9 @@ class MainWindow(QMainWindow):
         self.stop_button.setEnabled(False)
         self._update_ab_controls()
         if self._ab_repeat_ready:
-            self.statusBar().showMessage(
-                "Диапазон A–B завершён. Нажмите Space для повторного воспроизведения."
-            )
+            self.statusBar().showMessage(self._t("range_complete"))
         else:
-            self.statusBar().showMessage("Последовательное озвучивание завершено.")
+            self.statusBar().showMessage(self._t("sequence_complete"))
 
     def _stop_sequence(self, message: str | None = None) -> None:
         was_active = self.sequence.stop()
@@ -1476,7 +1629,7 @@ class MainWindow(QMainWindow):
         if was_active:
             self.replay_button.setEnabled(bool(self.source_edit.toPlainText().strip()))
             self.stop_button.setEnabled(False)
-            self.statusBar().showMessage(message or "Последовательное озвучивание остановлено.")
+            self.statusBar().showMessage(message or self._t("sequence_stopped"))
         self._update_ab_controls()
 
     @Slot()
@@ -1487,22 +1640,24 @@ class MainWindow(QMainWindow):
         if self.tasks.foreground:
             self.tasks.cancel_foreground()
         self.stop_audio()
-        self.statusBar().showMessage("Операция остановлена.")
+        self.statusBar().showMessage(self._t("operation_stopped"))
 
     @Slot()
     def save_audio(self) -> None:
         if not self.audio_path or not self.audio_path.exists():
-            QMessageBox.information(self, APP_TITLE, "Сначала озвучьте текст.")
+            QMessageBox.information(
+                self, self.windowTitle(), self._t("save_audio_first")
+            )
             return
-        suggested_stem = "озвучка"
+        suggested_stem = self._t("audio_stem")
         if self.current_source_path:
             suggested_stem = self.current_source_path.stem
         suggested = self._export_dialog_path(suggested_stem, ".mp3")
         filename, _ = QFileDialog.getSaveFileName(
             self,
-            "Сохранить MP3",
+            self._t("save_mp3_title"),
             str(suggested),
-            "Аудиофайлы MP3 (*.mp3);;Все файлы (*.*)",
+            self._t("mp3_filter"),
         )
         if not filename:
             return
@@ -1510,9 +1665,9 @@ class MainWindow(QMainWindow):
             target = self._language_export_path(filename, ".mp3")
             target.write_bytes(self.audio_path.read_bytes())
             self._remember_directory("last_export_directory", target.parent)
-            self.statusBar().showMessage(f"Аудио сохранено: {target}")
+            self.statusBar().showMessage(self._t("audio_saved", path=target))
         except OSError as exc:
-            self._show_error(f"Не удалось сохранить MP3 файл: {exc}")
+            self._show_error(self._t("save_audio_failed", error=exc))
 
     @Slot()
     def stop_audio(self) -> None:
@@ -1525,11 +1680,9 @@ class MainWindow(QMainWindow):
         self.stop_button.setEnabled(playing or busy or self.sequence.active)
         if not playing and not busy and not self.sequence.active:
             if self._ab_repeat_ready:
-                self.statusBar().showMessage(
-                    "Диапазон A–B завершён. Нажмите Space для повторного воспроизведения."
-                )
+                self.statusBar().showMessage(self._t("range_complete"))
             else:
-                self.statusBar().showMessage("Готово")
+                self.statusBar().showMessage(self._t("ready"))
 
     @Slot()
     def save_file(self) -> None:
@@ -1537,7 +1690,9 @@ class MainWindow(QMainWindow):
         translation = self.translation_edit.toPlainText()
         transcription = self.transcription_edit.toPlainText()
         if not original and not translation and not transcription:
-            QMessageBox.information(self, APP_TITLE, "Нет текста для сохранения.")
+            QMessageBox.information(
+                self, self.windowTitle(), self._t("no_text_to_save")
+            )
             return
         if self.subtitle_cues:
             self._save_subtitle_file(original, translation, transcription)
@@ -1551,19 +1706,19 @@ class MainWindow(QMainWindow):
         ):
             QMessageBox.information(
                 self,
-                APP_TITLE,
-                "Для учебного комплекта сначала выполните озвучивание.",
+                self.windowTitle(),
+                self._t("learning_audio_first"),
             )
             return
-        suggested_stem = "перевод"
+        suggested_stem = self._t("translation_stem")
         if self.current_source_path:
             suggested_stem = self.current_source_path.stem
         suggested = self._export_dialog_path(suggested_stem, ".txt")
         filename, _ = QFileDialog.getSaveFileName(
             self,
-            EXPORT_LABELS[export_kind],
+            self._export_label(export_kind),
             str(suggested),
-            TEXT_FILTER,
+            self._t("text_filter"),
         )
         if not filename:
             return
@@ -1580,7 +1735,7 @@ class MainWindow(QMainWindow):
             self._remember_directory("last_export_directory", target.parent)
             if export_kind in {ExportKind.FULL, ExportKind.LEARNING_KIT}:
                 self._dirty = False
-            message = f"Сохранено: {result.text_path}"
+            message = self._t("saved", path=result.text_path)
             if result.audio_path:
                 message += f"; {result.audio_path.name}"
             self.statusBar().showMessage(message)
@@ -1596,17 +1751,21 @@ class MainWindow(QMainWindow):
         if not translation.strip():
             QMessageBox.information(
                 self,
-                APP_TITLE,
-                "Сначала выполните перевод субтитров.",
+                self.windowTitle(),
+                self._t("translate_subtitles_first"),
             )
             return
-        suggested_stem = self.current_source_path.stem if self.current_source_path else "субтитры"
+        suggested_stem = (
+            self.current_source_path.stem
+            if self.current_source_path
+            else self._t("subtitles_stem")
+        )
         suggested = self._export_dialog_path(suggested_stem, ".srt")
         filename, _ = QFileDialog.getSaveFileName(
             self,
-            "Сохранить переведённые субтитры",
+            self._t("save_subtitles"),
             str(suggested),
-            SRT_FILTER,
+            self._t("srt_filter"),
         )
         if not filename:
             return
@@ -1623,29 +1782,25 @@ class MainWindow(QMainWindow):
             )
             self._remember_directory("last_export_directory", target.parent)
             self._dirty = False
-            self.statusBar().showMessage(f"Субтитры сохранены: {target}")
+            self.statusBar().showMessage(self._t("subtitles_saved", path=target))
         except AppError as exc:
             self._show_error(str(exc))
 
     def _select_export_kind(self) -> tuple[ExportKind, ExportLayout] | None:
         dialog = QDialog(self)
-        dialog.setWindowTitle("Формат экспорта")
+        dialog.setWindowTitle(self._t("export_format"))
         form = QFormLayout(dialog)
         kind_combo = QComboBox(dialog)
-        for kind, label in EXPORT_LABELS.items():
-            kind_combo.addItem(label, kind.value)
-        form.addRow("Содержимое файла:", kind_combo)
+        for kind in ExportKind:
+            kind_combo.addItem(self._export_label(kind), kind.value)
+        form.addRow(self._t("file_contents"), kind_combo)
         columns_checkbox = QCheckBox(
-            "Построчно по колонкам, блоками по 10 строк",
+            self._t("column_layout"),
             dialog,
         )
-        columns_checkbox.setToolTip(
-            "В зависимости от режима выводится одна, две или три колонки. "
-            "Для Chine и Japan в двухколоночном режиме выводятся соответственно "
-            "пиньинь и ромадзи вместо иероглифов. "
-            "Если выключено, данные сохраняются последовательными разделами."
-        )
-        form.addRow("Макет документа:", columns_checkbox)
+        columns_checkbox.setChecked(True)
+        columns_checkbox.setToolTip(self._t("column_layout_tip"))
+        form.addRow(self._t("document_layout"), columns_checkbox)
         buttons = QDialogButtonBox(
             QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel,
             parent=dialog,
@@ -1663,13 +1818,22 @@ class MainWindow(QMainWindow):
         )
         return kind, layout
 
+    def _export_label(self, kind: ExportKind) -> str:
+        keys = {
+            ExportKind.FULL: "export_full",
+            ExportKind.TRANSLATION: "export_translation",
+            ExportKind.BILINGUAL: "export_bilingual",
+            ExportKind.LEARNING_KIT: "export_learning",
+        }
+        return self._t(keys[kind])
+
     @Slot(str)
     def _show_error(self, message: str) -> None:
         LOGGER.error("User-visible error: %s", message)
         QMessageBox.critical(
             self,
-            APP_TITLE,
-            f"Операция не выполнена.\n\n{message}\n\nПодробности записаны в {LOG_PATH}.",
+            self.windowTitle(),
+            self._t("operation_failed", message=message, log=LOG_PATH),
         )
 
     def _confirm_discard_changes(self) -> bool:
@@ -1677,8 +1841,8 @@ class MainWindow(QMainWindow):
             return True
         answer = QMessageBox.question(
             self,
-            APP_TITLE,
-            "Есть несохранённые изменения. Продолжить без сохранения?",
+            self.windowTitle(),
+            self._t("unsaved_changes"),
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
             QMessageBox.StandardButton.No,
         )
@@ -1784,6 +1948,8 @@ def main() -> int:
     if smoke_test:
         from gpt01.transcription import to_ipa, to_pinyin, to_romaji
 
+        if any(not path.is_file() for path in HELP_PATHS.values()):
+            raise RuntimeError("Packaged user guides are missing")
         transcription_checks = (
             (to_ipa("hello", "en-us"), "hello"),
             (to_ipa("bonjour", "fr-fr"), "bonjour"),

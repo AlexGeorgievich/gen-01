@@ -28,5 +28,5 @@ if errorlevel 1 (
 
 echo.
 echo Build completed: dist\VoiceGun\VoiceGun.exe
-echo Package completed: release\VoiceGun-0.3.1-windows-x64.zip
+echo Package completed: release\VoiceGun-0.4.0-windows-x64.zip
 exit /b 0

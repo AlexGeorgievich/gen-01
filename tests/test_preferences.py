@@ -14,6 +14,12 @@ def test_preferences_round_trip(tmp_path):
     assert load_preferences(path) == expected
 
 
+def test_interface_language_defaults_to_english_and_is_validated():
+    assert Preferences.from_dict({}).interface_language == "en"
+    assert Preferences.from_dict({"interface_language": "ru"}).interface_language == "ru"
+    assert Preferences.from_dict({"interface_language": "invalid"}).interface_language == "en"
+
+
 def test_recent_directories_round_trip(tmp_path):
     path = tmp_path / "settings.json"
     expected = Preferences(

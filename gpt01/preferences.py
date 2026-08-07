@@ -16,6 +16,7 @@ class Preferences:
     french_article_mode: str = FrenchArticleMode.AUTO.value
     last_open_directory: str = ""
     last_export_directory: str = ""
+    interface_language: str = "en"
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> Preferences:
@@ -31,6 +32,9 @@ class Preferences:
         french_article_mode = FrenchArticleMode.parse(
             data.get("french_article_mode", FrenchArticleMode.AUTO.value)
         )
+        interface_language = str(data.get("interface_language", "en")).lower()
+        if interface_language not in {"en", "ru"}:
+            interface_language = "en"
         return cls(
             source_language_key=source,
             editor_font_size=min(32, max(8, font_size)),
@@ -41,6 +45,7 @@ class Preferences:
             last_export_directory=(
                 last_export_directory.strip() if isinstance(last_export_directory, str) else ""
             ),
+            interface_language=interface_language,
         )
 
 

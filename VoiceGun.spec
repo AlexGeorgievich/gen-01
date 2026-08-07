@@ -5,7 +5,11 @@ from pathlib import Path
 from PyInstaller.utils.hooks import collect_data_files, copy_metadata
 
 
-datas = [("assets/gpt01.svg", "assets")]
+datas = [
+    ("assets/gpt01.svg", "assets"),
+    ("docs/USER_GUIDE_EN.md", "docs"),
+    ("docs/USER_GUIDE_RU.md", "docs"),
+]
 binaries = []
 hiddenimports = ["gruut_lang_en", "gruut_lang_fr", "gruut_lang_es"]
 
@@ -62,4 +66,3 @@ coll = COLLECT(
     upx_exclude=[],
     name="VoiceGun",
 )
-
