@@ -30,6 +30,7 @@ from PySide6.QtWidgets import (
     QDialogButtonBox,
     QFileDialog,
     QFormLayout,
+    QGraphicsDropShadowEffect,
     QGroupBox,
     QHBoxLayout,
     QLabel,
@@ -126,6 +127,7 @@ class MainWindow(QMainWindow):
         self._range_a_line: int | None = None
         self._range_b_line: int | None = None
         self._sequence_scope: str | None = None
+        self._sequence_audio_parts: list[Path] = []
         self._ab_repeat_ready = False
         self.ab_audio_cache = LineAudioCache()
         self.sequence = PlaybackSequence()
@@ -466,6 +468,7 @@ class MainWindow(QMainWindow):
         window_controls.addStretch(1)
 
         self.voice_box = QGroupBox(self._t("language_and_voice"))
+        self.voice_box.setObjectName("voicePanel")
         voice_box_layout = QHBoxLayout(self.voice_box)
         voice_box_layout.setContentsMargins(10, 8, 10, 8)
         self.language_label = QLabel(self._t("language"))
@@ -489,19 +492,51 @@ class MainWindow(QMainWindow):
         layout.addWidget(self.editors, 1)
         self.setCentralWidget(central)
         central.setStyleSheet(
-            "QGroupBox#sourcePanel { background: #f7f9fc; border: 1px solid #cfd7e3; "
-            "border-radius: 7px; }"
-            "QGroupBox#translationPanel { background: #f2f8ff; border: 1px solid #bfd5ec; "
-            "border-radius: 7px; }"
-            "QGroupBox#transcriptionPanel { background: #f4faf6; border: 1px solid #c4ddcc; "
-            "border-radius: 7px; }"
-            "QTextEdit { background: white; border: 1px solid #d7dce2; border-radius: 5px; "
-            "padding: 4px; }"
+            "QWidget#centralWorkspace { background: #e9eff7; }"
+            "QGroupBox#voicePanel { background: #f8fbff; border: 1px solid #b8c9dc; "
+            "border-radius: 9px; margin-top: 7px; padding-top: 7px; }"
+            "QGroupBox#voicePanel::title { color: #29445f; subcontrol-origin: margin; "
+            "left: 12px; padding: 0 5px; font-weight: 600; }"
+            "QGroupBox#sourcePanel { background: #eef4ff; border: 2px solid #7aa7e8; "
+            "border-radius: 10px; }"
+            "QGroupBox#translationPanel { background: #edf9f6; border: 2px solid #65b9aa; "
+            "border-radius: 10px; }"
+            "QGroupBox#transcriptionPanel { background: #f5f0ff; border: 2px solid #a98add; "
+            "border-radius: 10px; }"
+            "QTextEdit { background: #ffffff; color: #172433; border: 1px solid #bdcad8; "
+            "border-radius: 7px; padding: 6px; selection-background-color: #ffd65a; "
+            "selection-color: #172433; }"
+            "QTextEdit:focus { border: 2px solid #397dcc; }"
+            "QPushButton { background: #f8fbff; color: #20364d; border: 1px solid #aebfd1; "
+            "border-radius: 5px; padding: 4px 9px; }"
+            "QPushButton:hover { background: #e0ecfa; border-color: #5f8fc4; }"
+            "QPushButton:pressed { background: #cbdff4; }"
+            "QPushButton:disabled { color: #8996a5; background: #e7ecf2; "
+            "border-color: #cad3dc; }"
+            "QComboBox, QSpinBox { background: white; color: #172433; "
+            "border: 1px solid #aebfd1; border-radius: 5px; padding: 4px 7px; }"
+        )
+        self.source_title.setStyleSheet("color: #245ea8; font-weight: 700;")
+        self.translation_title.setStyleSheet("color: #087a6d; font-weight: 700;")
+        self.transcription_title.setStyleSheet("color: #6841a5; font-weight: 700;")
+        self._apply_panel_shadows()
+        toolbar.setStyleSheet(
+            "QToolBar { background: #274761; border: none; spacing: 4px; padding: 6px; }"
+            "QToolBar QPushButton { background: #365d7b; color: #f7fbff; "
+            "border: 1px solid #527895; border-radius: 5px; padding: 5px 10px; }"
+            "QToolBar QPushButton:hover { background: #44779b; border-color: #86b2d0; }"
+            "QToolBar QPushButton:pressed { background: #1f3b52; }"
+            "QToolBar QPushButton:disabled { background: #304c63; color: #91a4b4; "
+            "border-color: #466278; }"
+            "QToolBar::separator { background: #69859a; width: 1px; margin: 5px 4px; }"
         )
         self.translate_button.setStyleSheet(
-            "QPushButton { background: #1769d2; color: white; font-weight: 600; "
-            "padding: 4px 12px; border: 1px solid #135bb8; border-radius: 4px; }"
-            "QPushButton:disabled { background: #a9bfdc; border-color: #a9bfdc; }"
+            "QPushButton { background: #1487d4; color: white; font-weight: 700; "
+            "padding: 5px 13px; border: 1px solid #60b7ec; border-radius: 5px; }"
+            "QPushButton:hover { background: #22a0ed; }"
+            "QPushButton:pressed { background: #0c6fab; }"
+            "QPushButton:disabled { background: #42647f; color: #8fa5b7; "
+            "border-color: #526f87; }"
         )
 
         status = QStatusBar()
@@ -512,6 +547,20 @@ class MainWindow(QMainWindow):
         status.addPermanentWidget(self.progress)
         self.setStatusBar(status)
         self.statusBar().showMessage(self._t("ready"))
+
+    def _apply_panel_shadows(self) -> None:
+        self._panel_shadows: list[QGraphicsDropShadowEffect] = []
+        for panel in (
+            self.source_box,
+            self.translation_box,
+            self.transcription_box,
+        ):
+            shadow = QGraphicsDropShadowEffect(panel)
+            shadow.setBlurRadius(22.0)
+            shadow.setOffset(0.0, 4.0)
+            shadow.setColor(QColor(27, 52, 77, 72))
+            panel.setGraphicsEffect(shadow)
+            self._panel_shadows.append(shadow)
 
     def _connect_signals(self) -> None:
         self.open_button.clicked.connect(self.open_file)
@@ -943,45 +992,15 @@ class MainWindow(QMainWindow):
 
     @Slot()
     def speak_text(self) -> None:
-        source_text = self.source_edit.toPlainText()
-        current_translation = self.translation_edit.toPlainText()
-        prepared_translation = self.language_controller.prepare_translation(
-            source_text,
-            current_translation,
+        rows = build_translation_rows(
+            self.source_edit.toPlainText(),
+            self.translation_edit.toPlainText(),
+            self.transcription_edit.toPlainText(),
         )
-        if prepared_translation != current_translation:
-            self._set_translation(prepared_translation)
-        text = prepared_translation.strip()
-        voice = self.selected_voice()
-        if not text:
-            QMessageBox.information(
-                self, self.windowTitle(), self._t("need_translation")
-            )
+        if not rows:
+            QMessageBox.information(self, self.windowTitle(), self._t("enter_source"))
             return
-        if not voice:
-            QMessageBox.information(self, self.windowTitle(), self._t("select_voice"))
-            return
-        tts_settings = self.tts_settings
-        speech_text = self.language_controller.prepare_speech(text)
-        self.stop_audio()
-        self._audio_line_number = None
-        self._replay_highlight_line = None
-        self._render_source_highlights()
-        fd, filename = tempfile.mkstemp(prefix="gpt01_tts_", suffix=".mp3")
-        os.close(fd)
-        output = Path(filename)
-
-        def synthesize(cancelled: Callable[[], bool]) -> str:
-            self.speech.synthesize(
-                speech_text,
-                voice,
-                output,
-                cancelled,
-                settings=tts_settings,
-            )
-            return str(output)
-
-        self._run_task(synthesize, self._play_file, self._t("synthesizing"))
+        self._begin_sequence(rows, "speak")
 
     @Slot()
     def speak_line_at_cursor(self) -> None:
@@ -1089,6 +1108,7 @@ class MainWindow(QMainWindow):
             previous_audio
             and previous_audio != self.audio_path
             and not self.ab_audio_cache.contains(previous_audio)
+            and previous_audio not in self._sequence_audio_parts
         ):
             self.repository.delete_temporary_audio(previous_audio)
 
@@ -1579,6 +1599,8 @@ class MainWindow(QMainWindow):
                 self._dirty = True
                 self._show_synchronized_line(line_number)
             self._audio_line_number = line_number
+            if self._sequence_scope == "speak":
+                self._sequence_audio_parts.append(Path(filename))
             self._play_file(filename)
             self.stop_button.setEnabled(True)
             self.statusBar().showMessage(
@@ -1625,6 +1647,8 @@ class MainWindow(QMainWindow):
         completed_scope = self._sequence_scope
         self.sequence.complete()
         self._sequence_scope = None
+        if completed_scope == "speak":
+            self._finalize_speak_sequence_audio()
         self._ab_repeat_ready = completed_scope == "ab"
         self._replay_highlight_line = None
         self._render_source_highlights()
@@ -1645,12 +1669,45 @@ class MainWindow(QMainWindow):
             self.tasks.cancel_foreground()
         self.player.stop()
         self.player.setSource(QUrl())
+        self._discard_speak_sequence_audio()
         self._render_source_highlights()
         if was_active:
             self.replay_button.setEnabled(bool(self.source_edit.toPlainText().strip()))
             self.stop_button.setEnabled(False)
             self.statusBar().showMessage(message or self._t("sequence_stopped"))
         self._update_ab_controls()
+
+    def _finalize_speak_sequence_audio(self) -> None:
+        parts = [path for path in self._sequence_audio_parts if path.exists()]
+        if not parts:
+            self._sequence_audio_parts.clear()
+            return
+        fd, filename = tempfile.mkstemp(prefix="gpt01_tts_", suffix=".mp3")
+        os.close(fd)
+        output = Path(filename)
+        try:
+            with output.open("wb") as destination:
+                for part in parts:
+                    destination.write(part.read_bytes())
+        except OSError:
+            output.unlink(missing_ok=True)
+            self._sequence_audio_parts.clear()
+            return
+        self.player.setSource(QUrl())
+        self.audio_path = output
+        for part in parts:
+            self.repository.delete_temporary_audio(part)
+        self._sequence_audio_parts.clear()
+        self.save_audio_button.setEnabled(True)
+
+    def _discard_speak_sequence_audio(self) -> None:
+        parts = tuple(self._sequence_audio_parts)
+        for part in parts:
+            self.repository.delete_temporary_audio(part)
+        if self.audio_path in parts:
+            self.audio_path = None
+            self.save_audio_button.setEnabled(False)
+        self._sequence_audio_parts.clear()
 
     @Slot()
     def stop_current_operation(self) -> None:

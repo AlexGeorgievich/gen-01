@@ -2,7 +2,13 @@ import os
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PySide6.QtWidgets import QApplication, QCheckBox, QDialog, QTextBrowser
+from PySide6.QtWidgets import (
+    QApplication,
+    QCheckBox,
+    QDialog,
+    QGraphicsDropShadowEffect,
+    QTextBrowser,
+)
 
 from app import MainWindow
 from gpt01.preferences import Preferences
@@ -50,6 +56,26 @@ def test_hidden_translation_has_accessible_restore_button(tmp_path) -> None:
 
     assert not window.translation_box.isHidden()
     assert window.translation_toggle_button.text() == "−"
+    window._dirty = False
+    window.close()
+
+
+def test_main_editor_panels_have_distinct_colors_and_soft_shadows(tmp_path) -> None:
+    _app()
+    window = MainWindow(SessionRepository(tmp_path))
+
+    assert "#eef4ff" in window.centralWidget().styleSheet()
+    assert "#edf9f6" in window.centralWidget().styleSheet()
+    assert "#f5f0ff" in window.centralWidget().styleSheet()
+    for panel in (
+        window.source_box,
+        window.translation_box,
+        window.transcription_box,
+    ):
+        shadow = panel.graphicsEffect()
+        assert isinstance(shadow, QGraphicsDropShadowEffect)
+        assert shadow.blurRadius() == 22.0
+        assert shadow.offset().y() == 4.0
     window._dirty = False
     window.close()
 

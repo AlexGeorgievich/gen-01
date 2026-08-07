@@ -1,4 +1,5 @@
 import os
+from pathlib import Path
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
@@ -223,5 +224,55 @@ def test_ab_repeat_reuses_cached_line_audio_and_reset_removes_it(qapp, tmp_path)
     assert cache_directory is not None
     assert not cache_directory.exists()
 
+    window._dirty = False
+    window.close()
+
+
+def test_speak_plays_source_rows_with_synchronized_highlight_and_combines_audio(
+    qapp,
+    tmp_path,
+):
+    window = MainWindow(SessionRepository(tmp_path))
+    window.source_edit.setPlainText("one\ntwo")
+    window.translation_edit.setPlainText("un\ndeux")
+    synthesized = []
+
+    def synthesize(text, _voice, output, _cancelled, *, settings=None):
+        synthesized.append((text, settings))
+        output.write_bytes(text.encode("utf-8"))
+
+    window.speech.synthesize = synthesize
+    window._run_task = lambda function, on_result, *_args: on_result(
+        function(lambda: False)
+    )
+    window._play_file = lambda filename: setattr(window, "audio_path", Path(filename))
+
+    window.speak_text()
+
+    assert window._sequence_scope == "speak"
+    for editor in (
+        window.source_edit,
+        window.translation_edit,
+        window.transcription_edit,
+    ):
+        assert editor.extraSelections()[0].cursor.blockNumber() == 0
+
+    window._media_status_changed(QMediaPlayer.MediaStatus.EndOfMedia)
+
+    for editor in (
+        window.source_edit,
+        window.translation_edit,
+        window.transcription_edit,
+    ):
+        assert editor.extraSelections()[0].cursor.blockNumber() == 1
+
+    window._media_status_changed(QMediaPlayer.MediaStatus.EndOfMedia)
+
+    assert synthesized == [("un", window.tts_settings), ("deux", window.tts_settings)]
+    assert not window.sequence.active
+    assert window.audio_path.read_bytes() == b"undeux"
+    assert window.save_audio_button.isEnabled()
+
+    window._reset_audio_state()
     window._dirty = False
     window.close()

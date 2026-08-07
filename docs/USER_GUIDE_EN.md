@@ -47,7 +47,9 @@ VoiceGun preserves paragraphs and line alignment. Translation is provided by
 
 Select a Microsoft TTS voice and use:
 
-- **Speak** — create speech for the complete translation;
+- **Speak** — speak the material line by line with synchronized highlighting and
+  scrolling in all three columns; after completion, the generated lines are
+  combined for **Save MP3**;
 - **Replay** — speak source lines sequentially, translating missing lines when
   required;
 - **Stop** — stop the current playback or foreground operation;
