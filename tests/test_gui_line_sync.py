@@ -70,3 +70,19 @@ def test_visible_synchronized_line_does_not_move_scroll_position(qapp, tmp_path)
 
     window._dirty = False
     window.close()
+
+
+def test_clearing_source_window_clears_all_aligned_columns(qapp, tmp_path):
+    window = MainWindow(SessionRepository(tmp_path))
+    window.source_edit.setPlainText("source")
+    window.translation_edit.setPlainText("translation")
+    window.transcription_edit.setPlainText("transcription")
+
+    window.source_clear_button.click()
+
+    assert window.source_edit.toPlainText() == ""
+    assert window.translation_edit.toPlainText() == ""
+    assert window.transcription_edit.toPlainText() == ""
+    assert window._dirty is True
+    window._dirty = False
+    window.close()

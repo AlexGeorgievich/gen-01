@@ -57,17 +57,22 @@ def test_hidden_translation_has_accessible_restore_button(tmp_path) -> None:
 def test_help_uses_local_english_guide_and_f1(tmp_path, monkeypatch) -> None:
     _app()
     window = MainWindow(SessionRepository(tmp_path))
-    captured: dict[str, str] = {}
+    captured: dict[str, str | float] = {}
 
     def inspect_dialog(dialog: QDialog) -> QDialog.DialogCode:
         browser = dialog.findChild(QTextBrowser)
         captured["text"] = browser.toPlainText()
+        captured["point_size"] = browser.font().pointSizeF()
         return QDialog.DialogCode.Rejected
 
     monkeypatch.setattr(QDialog, "exec", inspect_dialog)
+    expected_point_size = window.font().pointSizeF() + 2.0
     window.open_help()
 
     assert "VoiceGun User Guide" in captured["text"]
+    assert "AlexGeorgievich" in captured["text"]
+    assert "alex34.st@gmail.com" in captured["text"]
+    assert captured["point_size"] == expected_point_size
     assert window.help_shortcut.key().toString() == "F1"
     window._dirty = False
     window.close()

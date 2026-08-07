@@ -133,3 +133,8 @@ write permission has been granted.
 - `Space` — replay a completed A–B range;
 - `F1` — open this guide.
 
+## Author
+
+AlexGeorgievich
+
+Email: [alex34.st@gmail.com](mailto:alex34.st@gmail.com)

@@ -662,6 +662,11 @@ class MainWindow(QMainWindow):
         dialog.resize(820, 680)
         layout = QVBoxLayout(dialog)
         browser = QTextBrowser(dialog)
+        help_font = browser.font()
+        base_point_size = help_font.pointSizeF()
+        if base_point_size > 0:
+            help_font.setPointSizeF(base_point_size + 2.0)
+            browser.setFont(help_font)
         help_path = HELP_PATHS[self.preferences.interface_language]
         try:
             browser.setMarkdown(help_path.read_text(encoding="utf-8"))
@@ -1112,7 +1117,22 @@ class MainWindow(QMainWindow):
 
     @Slot()
     def clear_source_window(self) -> None:
-        self.source_edit.clear()
+        editors = (
+            self.source_edit,
+            self.translation_edit,
+            self.transcription_edit,
+        )
+        if not any(editor.toPlainText() for editor in editors):
+            return
+        for editor in editors:
+            editor.blockSignals(True)
+        try:
+            for editor in editors:
+                editor.clear()
+        finally:
+            for editor in editors:
+                editor.blockSignals(False)
+        self._on_source_text_changed()
 
     @Slot()
     def clear_translation_window(self) -> None:

@@ -128,3 +128,8 @@ VoiceGun хранит рабочие файлы рядом с `VoiceGun.exe`:
 - `Space` — повторить завершённый диапазон A–B;
 - `F1` — открыть это руководство.
 
+## Автор
+
+AlexGeorgievich
+
+Электронная почта: [alex34.st@gmail.com](mailto:alex34.st@gmail.com)
