@@ -40,10 +40,16 @@ class RestoredSession:
 class SessionRepository:
     """Own persistent paths and serialization for language-specific sessions."""
 
-    def __init__(self, application_root: Path, legacy_root: Path | None = None) -> None:
+    def __init__(
+        self,
+        application_root: Path,
+        legacy_root: Path | None = None,
+        *,
+        data_root: Path | None = None,
+    ) -> None:
         self.application_root = application_root
         self.legacy_root = legacy_root
-        self.data_root = application_root / "language_data"
+        self.data_root = data_root or application_root / "language_data"
         self.selection_path = application_root / "language_selection.json"
         self.preferences_path = application_root / "settings.json"
         self.legacy_state_path = application_root / "app_state.json"
@@ -57,18 +63,21 @@ class SessionRepository:
         *,
         storage_root: Path | None = None,
     ) -> SessionRepository:
+        previous_user_root = storage_root or user_data_root()
         repository = cls(
-            storage_root or user_data_root(),
-            legacy_root=application_root,
+            application_root,
+            legacy_root=previous_user_root,
+            data_root=application_root / "language_data",
         )
         try:
             repository.migrate_legacy_data()
         except OSError:
-            LOGGER.exception("Could not migrate application data from %s", application_root)
+            LOGGER.exception("Could not prepare portable application data in %s", application_root)
         return repository
 
     def migrate_legacy_data(self) -> bool:
-        """Copy legacy project-local data once, without overwriting newer files."""
+        """Copy former per-user data to the portable root without overwriting."""
+        self.data_root.mkdir(parents=True, exist_ok=True)
         if not self.legacy_root or self.migration_marker_path.exists():
             return False
         try:

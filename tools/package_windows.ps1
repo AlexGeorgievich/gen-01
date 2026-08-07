@@ -12,6 +12,21 @@ if (-not (Test-Path -LiteralPath $executable -PathType Leaf)) {
     throw "VoiceGun.exe not found. Run build_windows.bat first."
 }
 
+$privateRootNames = @(
+    "settings.json",
+    "language_selection.json",
+    "app_state.json",
+    "last_audio.mp3",
+    "voicegun.log",
+    ".migration-v1.json"
+)
+foreach ($privateName in $privateRootNames) {
+    $privatePath = Join-Path $distDirectory $privateName
+    if (Test-Path -LiteralPath $privatePath) {
+        throw "Packaging stopped to protect private application data: $privatePath"
+    }
+}
+
 $versionFile = Join-Path $projectRoot "gpt01\version.py"
 $versionMatch = Select-String -LiteralPath $versionFile -Pattern '^__version__ = "([^"]+)"$'
 if (-not $versionMatch) {
@@ -25,6 +40,16 @@ foreach ($document in @("LICENSE", "README.md", "DISTRIBUTION.md", "Doc-Size.md"
         Copy-Item -LiteralPath $source -Destination $distDirectory -Force
     }
 }
+$portableDataDirectory = Join-Path $distDirectory "language_data"
+New-Item -ItemType Directory -Path $portableDataDirectory -Force | Out-Null
+$unexpectedPortableFiles = Get-ChildItem -LiteralPath $portableDataDirectory `
+    -Recurse -File | Where-Object { $_.Name -ne "README.txt" }
+if ($unexpectedPortableFiles) {
+    $names = ($unexpectedPortableFiles.FullName -join ", ")
+    throw "Packaging stopped to protect user language data: $names"
+}
+Copy-Item -LiteralPath (Join-Path $projectRoot "assets\language_data_README.txt") `
+    -Destination (Join-Path $portableDataDirectory "README.txt") -Force
 
 New-Item -ItemType Directory -Path $releaseDirectory -Force | Out-Null
 $archiveName = "VoiceGun-$version-windows-x64.zip"
@@ -44,7 +69,11 @@ Compress-Archive -LiteralPath $distDirectory -DestinationPath $archivePath `
 Add-Type -AssemblyName System.IO.Compression.FileSystem
 $zip = [System.IO.Compression.ZipFile]::OpenRead($archivePath)
 try {
-    $requiredEntries = @("VoiceGun/VoiceGun.exe", "VoiceGun/_internal/")
+    $requiredEntries = @(
+        "VoiceGun/VoiceGun.exe",
+        "VoiceGun/_internal/",
+        "VoiceGun/language_data/README.txt"
+    )
     $entryNames = $zip.Entries.FullName -replace '\\', '/'
     foreach ($requiredEntry in $requiredEntries) {
         if (-not ($entryNames | Where-Object { $_.StartsWith($requiredEntry) })) {

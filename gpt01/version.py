@@ -5,4 +5,4 @@ APP_DISPLAY_NAME = "VoiceGun — многоязычный переводчик +
 APP_AUTHOR = "AlexGeorgievich"
 APP_ORGANIZATION = "AlexGeorgievich"
 APP_ID = "com.alexgeorgievich.voicegun"
-__version__ = "0.3.0"
+__version__ = "0.3.1"

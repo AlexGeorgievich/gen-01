@@ -62,7 +62,7 @@ from gpt01.playback import PlaybackSequence
 from gpt01.preferences import Preferences
 from gpt01.rows import build_translation_rows, rows_between
 from gpt01.services import EdgeSpeechProvider
-from gpt01.session import SessionRepository, user_data_root
+from gpt01.session import SessionRepository
 from gpt01.state import AppState
 from gpt01.storage import load_document, save_document
 from gpt01.structured_translation import (
@@ -96,12 +96,12 @@ APPLICATION_ROOT = (
 )
 BUNDLE_ROOT = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent))
 APP_ICON_PATH = BUNDLE_ROOT / "assets" / "gpt01.svg"
-try:
-    USER_DATA_ROOT = user_data_root()
-    USER_DATA_ROOT.mkdir(parents=True, exist_ok=True)
-    LOG_PATH = USER_DATA_ROOT / "gpt01.log"
-except OSError:
-    LOG_PATH = Path(tempfile.gettempdir()) / "gpt01.log"
+SMOKE_TEST_MODE = "--smoke-test" in sys.argv
+LOG_PATH = (
+    Path(tempfile.gettempdir()) / "voicegun_smoke.log"
+    if SMOKE_TEST_MODE
+    else APPLICATION_ROOT / "voicegun.log"
+)
 logging.basicConfig(
     filename=LOG_PATH,
     level=logging.INFO,
@@ -1780,7 +1780,8 @@ def main() -> int:
     app.setDesktopFileName(APP_AUTHOR + "." + APP_NAME)
     if APP_ICON_PATH.is_file():
         app.setWindowIcon(QIcon(str(APP_ICON_PATH)))
-    if "--smoke-test" in sys.argv:
+    smoke_test = SMOKE_TEST_MODE
+    if smoke_test:
         from gpt01.transcription import to_ipa, to_pinyin, to_romaji
 
         transcription_checks = (
@@ -1792,12 +1793,14 @@ def main() -> int:
         )
         if any(not result or result == source for result, source in transcription_checks):
             raise RuntimeError("Не загружены данные транскрипции дистрибутива")
+        with tempfile.TemporaryDirectory(prefix="voicegun_smoke_") as storage:
+            repository = SessionRepository(Path(storage))
+            window = MainWindow(repository)
+            window.tasks.cancel_all()
+            window.player.stop()
+            window.ab_audio_cache.clear()
+            return 0
     window = MainWindow()
-    if "--smoke-test" in sys.argv:
-        window.tasks.cancel_all()
-        window.player.stop()
-        window.ab_audio_cache.clear()
-        return 0
     window.show()
     return app.exec()
 

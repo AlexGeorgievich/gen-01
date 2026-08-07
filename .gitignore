@@ -7,6 +7,8 @@ __pycache__/
 *.zip
 voices_cache.json
 gpt01.log
+voicegun.log
+.migration-*.json
 app_state.json
 app_state.json.tmp
 last_audio.mp3
