@@ -11,7 +11,7 @@ hiddenimports = ["gruut_lang_en", "gruut_lang_fr", "gruut_lang_es"]
 
 for package in ("gruut", "gruut_lang_en", "gruut_lang_fr", "gruut_lang_es", "pykakasi"):
     for source, destination in collect_data_files(package):
-        # GPT01 uses gruut's native lexicon/G2P model. The duplicate eSpeak
+        # VoiceGun uses gruut's native lexicon/G2P model. The duplicate eSpeak
         # databases are not selected by the application and add about 70 MB.
         if "espeak" not in Path(source).parts:
             datas.append((source, destination))
@@ -39,7 +39,7 @@ exe = EXE(
     a.scripts,
     [],
     exclude_binaries=True,
-    name="GPT01",
+    name="VoiceGun",
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
@@ -60,5 +60,6 @@ coll = COLLECT(
     strip=False,
     upx=True,
     upx_exclude=[],
-    name="GPT01",
+    name="VoiceGun",
 )
+

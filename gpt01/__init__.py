@@ -1,4 +1,4 @@
-"""Core package for the GPT01 desktop application."""
+"""Core package for the VoiceGun desktop application."""
 
 from gpt01.version import __version__
 

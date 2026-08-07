@@ -17,7 +17,8 @@ settings.json.tmp
 language_data/
 dist/
 build/
+release/
 *.spec
-!GPT01.spec
+!VoiceGun.spec
 /SAP-*.txt
 /var-*.txt

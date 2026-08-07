@@ -8,7 +8,7 @@ if not exist ".venv\Scripts\python.exe" (
     exit /b 1
 )
 
-".venv\Scripts\python.exe" -m PyInstaller --clean --noconfirm GPT01.spec
+".venv\Scripts\python.exe" -m PyInstaller --clean --noconfirm VoiceGun.spec
 if errorlevel 1 (
     echo.
     echo Build failed. See the messages above.
@@ -16,9 +16,17 @@ if errorlevel 1 (
     exit /b 1
 )
 
-copy /Y "LICENSE" "dist\GPT01\LICENSE" >nul
-copy /Y "README.md" "dist\GPT01\README.md" >nul
+copy /Y "LICENSE" "dist\VoiceGun\LICENSE" >nul
+copy /Y "README.md" "dist\VoiceGun\README.md" >nul
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File "tools\package_windows.ps1"
+if errorlevel 1 (
+    echo.
+    echo Packaging failed. See the messages above.
+    pause
+    exit /b 1
+)
 
 echo.
-echo Build completed: dist\GPT01\GPT01.exe
+echo Build completed: dist\VoiceGun\VoiceGun.exe
+echo Package completed: release\VoiceGun-0.3.0-windows-x64.zip
 exit /b 0
