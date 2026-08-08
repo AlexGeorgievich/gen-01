@@ -6,8 +6,8 @@ SUPPORTED_INTERFACE_LANGUAGES = {"en", "ru"}
 
 _STRINGS: dict[str, tuple[str, str]] = {
     "app_title": (
-        "VoiceGun — Multilingual Translator + Microsoft TTS",
-        "VoiceGun — многоязычный переводчик + Microsoft TTS",
+        "VoiceGun",
+        "VoiceGun",
     ),
     "open": ("Open…", "Открыть…"),
     "batch": ("Batch…", "Пакет…"),
@@ -129,6 +129,12 @@ _STRINGS: dict[str, tuple[str, str]] = {
     "operation_stopped": ("Operation stopped.", "Операция остановлена."),
     "canceling": ("Canceling operation…", "Отмена операции…"),
     "save_mp3_title": ("Save MP3", "Сохранить MP3"),
+    "audio_scope_prompt": ("Record:", "Записать:"),
+    "audio_scope_range": (
+        "A–B interval (lines {start}–{end})",
+        "Интервал A–B (строки {start}–{end})",
+    ),
+    "audio_scope_full": ("Complete text", "Весь текст"),
     "save_audio_first": ("Generate speech first.", "Сначала озвучьте текст."),
     "no_text_to_save": ("There is no text to save.", "Нет текста для сохранения."),
     "export_format": ("Export format", "Формат экспорта"),
@@ -260,6 +266,7 @@ _STRINGS: dict[str, tuple[str, str]] = {
         "Full document: source + translation + transcription",
         "Полный документ: оригинал + перевод + транскрипция",
     ),
+    "export_source": ("Source text only", "Сохранить только текст"),
     "export_translation": ("Translation only", "Только перевод"),
     "export_bilingual": (
         "Bilingual document: source + translation/transcription",

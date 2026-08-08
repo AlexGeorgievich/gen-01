@@ -143,6 +143,7 @@ class MainWindow(QMainWindow):
         self.current_source_path: Path | None = None
         self.subtitle_cues: tuple[SubtitleCue, ...] = ()
         self.audio_path: Path | None = None
+        self._audio_is_complete_document = False
         self.player = QMediaPlayer(self)
         self.audio_output = QAudioOutput(self)
         self.player.setAudioOutput(self.audio_output)
@@ -477,6 +478,7 @@ class MainWindow(QMainWindow):
         voice_box_layout.addWidget(self.language_combo)
         voice_box_layout.addWidget(self.voice_label)
         voice_box_layout.addWidget(self.voice_combo, 1)
+        voice_box_layout.addStretch(1)
         voice_box_layout.addWidget(self.voice_status)
         voice_box_layout.addWidget(self.reload_voices_button)
         self.language_combo.setMinimumWidth(105)
@@ -799,6 +801,7 @@ class MainWindow(QMainWindow):
         self.replay_button.setEnabled(
             not busy and not self.sequence.active and bool(self.source_edit.toPlainText().strip())
         )
+        self._update_save_audio_button(busy=busy)
         self._update_ab_controls()
         self.statusBar().showMessage(message)
 
@@ -1097,13 +1100,14 @@ class MainWindow(QMainWindow):
     def _play_file(self, filename: str) -> None:
         previous_audio = self.audio_path
         self.audio_path = Path(filename)
+        self._audio_is_complete_document = False
         self.player.stop()
         self.player.setSource(QUrl())
         self.player.setSource(QUrl.fromLocalFile(filename))
         self.player.play()
         self.statusBar().showMessage(self._t("playing"))
         self.replay_button.setEnabled(not self.sequence.active)
-        self.save_audio_button.setEnabled(True)
+        self._update_save_audio_button()
         if (
             previous_audio
             and previous_audio != self.audio_path
@@ -1409,9 +1413,10 @@ class MainWindow(QMainWindow):
             old_path = self.audio_path
             self.audio_path = None
             self.repository.delete_temporary_audio(old_path)
+        self._audio_is_complete_document = False
         self.ab_audio_cache.clear()
         self.replay_button.setEnabled(bool(self.source_edit.toPlainText().strip()))
-        self.save_audio_button.setEnabled(False)
+        self._update_save_audio_button()
         if not self.progress.isVisible():
             self.speak_button.setEnabled(True)
             self.translate_button.setEnabled(True)
@@ -1484,6 +1489,7 @@ class MainWindow(QMainWindow):
         self._ab_repeat_ready = False
         generation = self.sequence.start(rows)
         self.replay_button.setEnabled(False)
+        self._update_save_audio_button()
         self.stop_button.setEnabled(True)
         self._update_ab_controls()
         self._play_next_sequence_line(generation)
@@ -1654,6 +1660,7 @@ class MainWindow(QMainWindow):
         self._render_source_highlights()
         self.replay_button.setEnabled(True)
         self.stop_button.setEnabled(False)
+        self._update_save_audio_button()
         self._update_ab_controls()
         if self._ab_repeat_ready:
             self.statusBar().showMessage(self._t("range_complete"))
@@ -1695,10 +1702,11 @@ class MainWindow(QMainWindow):
             return
         self.player.setSource(QUrl())
         self.audio_path = output
+        self._audio_is_complete_document = True
         for part in parts:
             self.repository.delete_temporary_audio(part)
         self._sequence_audio_parts.clear()
-        self.save_audio_button.setEnabled(True)
+        self._update_save_audio_button()
 
     def _discard_speak_sequence_audio(self) -> None:
         parts = tuple(self._sequence_audio_parts)
@@ -1706,8 +1714,24 @@ class MainWindow(QMainWindow):
             self.repository.delete_temporary_audio(part)
         if self.audio_path in parts:
             self.audio_path = None
-            self.save_audio_button.setEnabled(False)
+            self._audio_is_complete_document = False
         self._sequence_audio_parts.clear()
+        self._update_save_audio_button()
+
+    def _update_save_audio_button(self, *, busy: bool | None = None) -> None:
+        if busy is None:
+            busy = self.tasks.foreground is not None
+        complete_audio = bool(
+            self._audio_is_complete_document
+            and self.audio_path
+            and self.audio_path.exists()
+        )
+        can_generate = bool(
+            self.translation_edit.toPlainText().strip() and self.selected_voice()
+        )
+        self.save_audio_button.setEnabled(
+            not busy and not self.sequence.active and (complete_audio or can_generate)
+        )
 
     @Slot()
     def stop_current_operation(self) -> None:
@@ -1721,10 +1745,25 @@ class MainWindow(QMainWindow):
 
     @Slot()
     def save_audio(self) -> None:
-        if not self.audio_path or not self.audio_path.exists():
+        audio_scope = self._select_audio_export_scope()
+        if audio_scope is None:
+            return
+        translation = self.translation_edit.toPlainText()
+        complete_audio = bool(
+            audio_scope == "full"
+            and
+            self._audio_is_complete_document
+            and self.audio_path
+            and self.audio_path.exists()
+        )
+        if not complete_audio and not translation.strip():
             QMessageBox.information(
-                self, self.windowTitle(), self._t("save_audio_first")
+                self, self.windowTitle(), self._t("need_translation")
             )
+            return
+        voice = self.selected_voice()
+        if not complete_audio and not voice:
+            QMessageBox.information(self, self.windowTitle(), self._t("select_voice"))
             return
         suggested_stem = self._t("audio_stem")
         if self.current_source_path:
@@ -1738,9 +1777,120 @@ class MainWindow(QMainWindow):
         )
         if not filename:
             return
+        target = self._language_export_path(filename, ".mp3")
+        if complete_audio and self.audio_path:
+            self._save_complete_audio(self.audio_path, target)
+            return
+
+        source_text = self.source_edit.toPlainText()
+        selected_rows: list[TranslationRow] = []
+        if audio_scope == "range":
+            selected_rows = rows_between(
+                build_translation_rows(
+                    source_text,
+                    translation,
+                    self.transcription_edit.toPlainText(),
+                ),
+                self._range_a_line or 0,
+                self._range_b_line or 0,
+            )
+            if not selected_rows:
+                QMessageBox.information(
+                    self,
+                    self.windowTitle(),
+                    self._t("empty_range"),
+                )
+                return
+        tts_settings = self.tts_settings
+        fd, temporary_name = tempfile.mkstemp(prefix="gpt01_full_tts_", suffix=".mp3")
+        os.close(fd)
+        output = Path(temporary_name)
+
+        def synthesize_full_document(cancelled: Callable[[], bool]) -> str:
+            try:
+                if selected_rows:
+                    targets = []
+                    for row in selected_rows:
+                        target_text = row.translation or self.translator.translate(
+                            row.source,
+                            cancelled,
+                        )
+                        targets.append(
+                            self.language_controller.prepare_translation(
+                                row.source,
+                                target_text,
+                            )
+                        )
+                    prepared_translation = "\n".join(targets)
+                else:
+                    prepared_translation = self.language_controller.prepare_translation(
+                        source_text,
+                        translation,
+                    )
+                speech_text = self.language_controller.prepare_speech(
+                    prepared_translation
+                )
+                self.speech.synthesize(
+                    speech_text,
+                    voice,
+                    output,
+                    cancelled,
+                    settings=tts_settings,
+                )
+            except Exception:
+                output.unlink(missing_ok=True)
+                raise
+            return str(output)
+
+        def save_full_document(path: str) -> None:
+            generated_audio = Path(path)
+            if audio_scope == "range":
+                self._save_complete_audio(generated_audio, target)
+                self.repository.delete_temporary_audio(generated_audio)
+                self._update_save_audio_button()
+                return
+            previous_audio = self.audio_path
+            self.audio_path = generated_audio
+            self._audio_is_complete_document = True
+            if previous_audio and previous_audio != self.audio_path:
+                self.repository.delete_temporary_audio(previous_audio)
+            self._save_complete_audio(self.audio_path, target)
+            self._update_save_audio_button()
+
+        self._run_task(
+            synthesize_full_document,
+            save_full_document,
+            self._t("synthesizing"),
+        )
+
+    def _select_audio_export_scope(self) -> str | None:
+        if self._range_a_line is None or self._range_b_line is None:
+            return "full"
+        first, last = sorted((self._range_a_line, self._range_b_line))
+        dialog = QDialog(self)
+        dialog.setWindowTitle(self._t("save_mp3_title"))
+        form = QFormLayout(dialog)
+        scope_combo = QComboBox(dialog)
+        scope_combo.addItem(
+            self._t("audio_scope_range", start=first + 1, end=last + 1),
+            "range",
+        )
+        scope_combo.addItem(self._t("audio_scope_full"), "full")
+        form.addRow(self._t("audio_scope_prompt"), scope_combo)
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel,
+            parent=dialog,
+        )
+        buttons.accepted.connect(dialog.accept)
+        buttons.rejected.connect(dialog.reject)
+        form.addRow(buttons)
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return None
+        return str(scope_combo.currentData())
+
+    def _save_complete_audio(self, source: Path, target: Path) -> None:
         try:
-            target = self._language_export_path(filename, ".mp3")
-            target.write_bytes(self.audio_path.read_bytes())
+            target.write_bytes(source.read_bytes())
             self._remember_directory("last_export_directory", target.parent)
             self.statusBar().showMessage(self._t("audio_saved", path=target))
         except OSError as exc:
@@ -1878,6 +2028,14 @@ class MainWindow(QMainWindow):
         columns_checkbox.setChecked(True)
         columns_checkbox.setToolTip(self._t("column_layout_tip"))
         form.addRow(self._t("document_layout"), columns_checkbox)
+
+        def update_layout_availability() -> None:
+            columns_checkbox.setEnabled(
+                str(kind_combo.currentData()) != ExportKind.SOURCE.value
+            )
+
+        kind_combo.currentIndexChanged.connect(update_layout_availability)
+        update_layout_availability()
         buttons = QDialogButtonBox(
             QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel,
             parent=dialog,
@@ -1898,6 +2056,7 @@ class MainWindow(QMainWindow):
     def _export_label(self, kind: ExportKind) -> str:
         keys = {
             ExportKind.FULL: "export_full",
+            ExportKind.SOURCE: "export_source",
             ExportKind.TRANSLATION: "export_translation",
             ExportKind.BILINGUAL: "export_bilingual",
             ExportKind.LEARNING_KIT: "export_learning",
@@ -1956,10 +2115,12 @@ class MainWindow(QMainWindow):
         )
         self.subtitle_cues = self._restore_subtitle_cues(self.current_source_path)
         self.audio_path = restored.audio_path
-        self.save_audio_button.setEnabled(bool(self.audio_path))
+        self._audio_is_complete_document = bool(
+            self.audio_path and self.audio_path.exists()
+        )
         if self.audio_path:
             self.player.setSource(QUrl.fromLocalFile(str(self.audio_path)))
-            self.save_audio_button.setEnabled(True)
+        self._update_save_audio_button()
         self.replay_button.setEnabled(
             bool(self.source_edit.toPlainText().strip())
             or bool(self.audio_path and self.audio_path.exists())

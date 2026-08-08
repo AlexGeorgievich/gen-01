@@ -276,3 +276,91 @@ def test_speak_plays_source_rows_with_synchronized_highlight_and_combines_audio(
     window._reset_audio_state()
     window._dirty = False
     window.close()
+
+
+def test_save_mp3_after_stopping_speak_synthesizes_the_full_translation(
+    qapp,
+    tmp_path,
+    monkeypatch,
+):
+    window = MainWindow(SessionRepository(tmp_path))
+    window.source_edit.setPlainText("one\ntwo")
+    window.translation_edit.setPlainText("un\ndeux")
+    synthesized = []
+
+    def synthesize(text, _voice, output, _cancelled, *, settings=None):
+        synthesized.append((text, settings))
+        output.write_bytes(text.encode("utf-8"))
+
+    window.speech.synthesize = synthesize
+    window._run_task = lambda function, on_result, *_args: on_result(
+        function(lambda: False)
+    )
+    window._play_file = lambda filename: setattr(window, "audio_path", Path(filename))
+
+    window.speak_text()
+    window.stop_current_operation()
+
+    assert not window.sequence.active
+    assert not window._audio_is_complete_document
+    assert window.save_audio_button.isEnabled()
+
+    selected = tmp_path / "lesson.mp3"
+    target = window._language_export_path(str(selected), ".mp3")
+    monkeypatch.setattr(
+        "app.QFileDialog.getSaveFileName",
+        lambda *_args, **_kwargs: (str(selected), ""),
+    )
+    window.save_audio()
+
+    assert synthesized[-1] == ("un\ndeux", window.tts_settings)
+    assert target.read_bytes() == b"un\ndeux"
+    assert window._audio_is_complete_document
+
+    window._reset_audio_state()
+    window._dirty = False
+    window.close()
+
+
+@pytest.mark.parametrize(
+    ("scope", "expected_audio"),
+    (("range", b"deux\ntrois"), ("full", b"un\ndeux\ntrois\nquatre")),
+)
+def test_save_mp3_with_ab_markers_supports_interval_or_full_text(
+    qapp,
+    tmp_path,
+    monkeypatch,
+    scope,
+    expected_audio,
+):
+    window = MainWindow(SessionRepository(tmp_path))
+    window.source_edit.setPlainText("one\ntwo\nthree\nfour")
+    window.translation_edit.setPlainText("un\ndeux\ntrois\nquatre")
+    window._range_a_line = 2
+    window._range_b_line = 1
+    window._select_audio_export_scope = lambda: scope
+
+    def synthesize(text, _voice, output, _cancelled, *, settings=None):
+        output.write_bytes(text.encode("utf-8"))
+
+    window.speech.synthesize = synthesize
+    window._run_task = lambda function, on_result, *_args: on_result(
+        function(lambda: False)
+    )
+    selected = tmp_path / f"lesson-{scope}.mp3"
+    target = window._language_export_path(str(selected), ".mp3")
+    monkeypatch.setattr(
+        "app.QFileDialog.getSaveFileName",
+        lambda *_args, **_kwargs: (str(selected), ""),
+    )
+
+    window.save_audio()
+
+    assert target.read_bytes() == expected_audio
+    assert window._audio_is_complete_document is (scope == "full")
+    if scope == "range":
+        assert window.audio_path is None
+
+    window._reset_audio_state()
+    window._dirty = False
+    window.close()

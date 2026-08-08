@@ -58,6 +58,15 @@ Select a Microsoft TTS voice and use:
 The corresponding line is highlighted and scrolled into view in all visible
 columns.
 
+Outside an A–B selection, **Save MP3** always saves the complete translated
+text. If line-by-line playback was stopped before the end, VoiceGun synthesizes
+the complete document before writing the MP3 instead of saving only the
+interrupted line.
+
+When both A and B markers are set, **Save MP3** first offers a choice between
+the marked A–B interval and the complete text. The interval is selected by
+default and its actual source line numbers are shown in the dialog.
+
 ## A–B learning range
 
 1. Place the text caret on the first source line and select **A**.
@@ -75,6 +84,8 @@ again unless the text, language, voice or TTS settings change.
 Select **Save text…**, then choose an export mode:
 
 - full document: source, translation and transcription;
+- source text only: plain contents of the first window without headers,
+  columns or separators;
 - translation only;
 - bilingual document;
 - learning kit: full TXT plus MP3.

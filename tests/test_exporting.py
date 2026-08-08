@@ -21,6 +21,21 @@ def test_translation_only_export_contains_no_markers():
     assert render_export(DOCUMENT, ExportKind.TRANSLATION) == "translation\n"
 
 
+@pytest.mark.parametrize(
+    "layout",
+    (ExportLayout.SEQUENTIAL, ExportLayout.THREE_COLUMNS),
+)
+def test_source_only_export_is_plain_first_window_text(layout):
+    document = Document("first line\n\nsecond\tline", "translation", "transcription")
+
+    rendered = render_export(document, ExportKind.SOURCE, layout)
+
+    assert rendered == "first line\n\nsecond\tline"
+    assert "Исходный текст" not in rendered
+    assert "|" not in rendered
+    assert "+" not in rendered
+
+
 def test_bilingual_export_omits_transcription():
     rendered = render_export(DOCUMENT, ExportKind.BILINGUAL)
 

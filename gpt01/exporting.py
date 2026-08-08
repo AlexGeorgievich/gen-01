@@ -21,6 +21,7 @@ _COLUMN_WIDTHS = {1: 75, 2: 36, 3: 23}
 
 class ExportKind(StrEnum):
     FULL = "full"
+    SOURCE = "source"
     TRANSLATION = "translation"
     BILINGUAL = "bilingual"
     LEARNING_KIT = "learning_kit"
@@ -33,6 +34,7 @@ class ExportLayout(StrEnum):
 
 EXPORT_LABELS = {
     ExportKind.FULL: "Полный документ: оригинал + перевод + транскрипция",
+    ExportKind.SOURCE: "Сохранить только текст",
     ExportKind.TRANSLATION: "Только перевод",
     ExportKind.BILINGUAL: "Двуязычный документ: оригинал + перевод/транскрипция",
     ExportKind.LEARNING_KIT: "Учебный комплект: полный TXT + MP3",
@@ -120,6 +122,8 @@ def render_columns(
 ) -> str:
     if block_size <= 0:
         raise ValueError("block_size must be greater than zero")
+    if kind == ExportKind.SOURCE:
+        return document.original.replace("\r\n", "\n").replace("\r", "\n")
 
     def lines(text: str) -> list[str]:
         values = text.replace("\r\n", "\n").replace("\r", "\n").split("\n")
@@ -205,6 +209,8 @@ def render_export(
     *,
     profile: LanguageProfile | None = None,
 ) -> str:
+    if kind == ExportKind.SOURCE:
+        return document.original.replace("\r\n", "\n").replace("\r", "\n")
     if layout == ExportLayout.THREE_COLUMNS:
         return render_columns(document, kind, profile=profile)
     if kind == ExportKind.TRANSLATION:
