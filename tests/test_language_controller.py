@@ -41,6 +41,25 @@ def test_controller_configures_russian_translation_voice_and_transcription():
     assert controller.transcribe("Привет") == "/prʲivʲet/"
 
 
+def test_controller_configures_new_translation_targets_and_voice_filters():
+    cases = (
+        ("German", "de", "de-DE"),
+        ("Italian", "it", "it-IT"),
+        ("Turkish", "tr", "tr-TR"),
+    )
+    voices = [
+        {"Locale": locale, "ShortName": f"{locale}-Voice"}
+        for _language, _target, locale in cases
+    ]
+
+    for language, target, locale in cases:
+        controller = LanguageController(language)
+        assert controller.translator.target_language == target
+        assert controller.filter_voices(voices) == [
+            {"Locale": locale, "ShortName": f"{locale}-Voice"}
+        ]
+
+
 def test_controller_transcribes_for_current_profile():
     controller = LanguageController("Chine")
     assert controller.transcribe("你好") == "nǐ hǎo"

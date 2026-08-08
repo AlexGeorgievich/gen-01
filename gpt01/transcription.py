@@ -17,7 +17,13 @@ from .asian_numerals import japanese_cardinal_romaji
 from .languages import TranscriptionMode
 
 LOGGER = logging.getLogger(__name__)
-_IPA_LANGUAGES = {"ipa_en": "en-us", "ipa_fr": "fr-fr", "ipa_es": "es-es"}
+_IPA_LANGUAGES = {
+    "ipa_en": "en-us",
+    "ipa_fr": "fr-fr",
+    "ipa_es": "es-es",
+    "ipa_de": "de-de",
+    "ipa_it": "it-it",
+}
 _IPA_VOWEL = re.compile(r"[aeiouyæɑɒɔɛəɚɝɜɞɪʊʌøœɐɨʉɯɤɶɵɘ]", re.IGNORECASE)
 _WRITTEN_VOWEL_GROUP = re.compile(r"[aeiouáéíóúü]+", re.IGNORECASE)
 _GRUUT_LOCK = threading.RLock()
@@ -61,6 +67,37 @@ _RUSSIAN_VOWEL_IPA = {
     "я": "a",
 }
 _RUSSIAN_IOTATED = frozenset("еёюя")
+_TURKISH_IPA = {
+    "a": "a",
+    "b": "b",
+    "c": "dʒ",
+    "ç": "tʃ",
+    "d": "d",
+    "e": "e",
+    "f": "f",
+    "g": "ɡ",
+    "h": "h",
+    "ı": "ɯ",
+    "i": "i",
+    "j": "ʒ",
+    "k": "k",
+    "l": "l",
+    "m": "m",
+    "n": "n",
+    "o": "o",
+    "ö": "œ",
+    "p": "p",
+    "r": "ɾ",
+    "s": "s",
+    "ş": "ʃ",
+    "t": "t",
+    "u": "u",
+    "ü": "y",
+    "v": "v",
+    "y": "j",
+    "z": "z",
+}
+_TURKISH_VOWEL_IPA = frozenset("aeɯioœuy")
 
 
 def to_pinyin(text: str) -> str:
@@ -207,6 +244,27 @@ def to_russian_ipa(text: str) -> str:
     return "\n".join(output)
 
 
+def to_turkish_ipa(text: str) -> str:
+    """Create a broad IPA rendering from Turkish's regular orthography."""
+    output: list[str] = []
+    for line in text.split("\n"):
+        if not line.strip():
+            output.append("")
+            continue
+        normalized = line.translate(str.maketrans({"I": "ı", "İ": "i"})).lower()
+        rendered: list[str] = []
+        for character in normalized:
+            if character == "ğ":
+                if rendered and rendered[-1][-1:] in _TURKISH_VOWEL_IPA:
+                    rendered[-1] += "ː"
+                else:
+                    rendered.append("ɰ")
+                continue
+            rendered.append(_TURKISH_IPA.get(character, character))
+        output.append(f"/{''.join(rendered).strip()}/")
+    return "\n".join(output)
+
+
 def transcribe(text: str, mode: TranscriptionMode) -> str:
     if mode == "pinyin":
         return to_pinyin(text)
@@ -214,6 +272,8 @@ def transcribe(text: str, mode: TranscriptionMode) -> str:
         return to_romaji(text)
     if mode == "ipa_ru":
         return to_russian_ipa(text)
+    if mode == "ipa_tr":
+        return to_turkish_ipa(text)
     if mode in _IPA_LANGUAGES:
         return to_ipa(text, _IPA_LANGUAGES[mode])
     return text

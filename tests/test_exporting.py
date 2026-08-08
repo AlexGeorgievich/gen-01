@@ -185,7 +185,10 @@ def test_japanese_bilingual_columns_use_romaji_instead_of_kanji():
     assert "Перевод" not in rendered
 
 
-@pytest.mark.parametrize("language", ["English", "French", "Spanish", "Russian"])
+@pytest.mark.parametrize(
+    "language",
+    ["English", "French", "Spanish", "German", "Italian", "Turkish", "Russian"],
+)
 def test_european_bilingual_columns_keep_translation(language):
     rendered = render_export(
         Document("исходный", "translated", "transcription"),

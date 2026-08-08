@@ -6,9 +6,9 @@ VoiceGun is a portable Windows application for translating, transcribing and
 speaking language-learning materials. It keeps the source text, translation and
 pronunciation representation aligned line by line.
 
-Supported target modules: English, French, Spanish, Russian, Japanese and
-Chinese. VoiceGun uses IPA for European languages and Russian, Romaji for
-Japanese, and Pinyin for Chinese.
+Supported target modules: English, French, Spanish, German, Italian, Turkish,
+Russian, Japanese and Chinese. VoiceGun uses IPA for European languages,
+Turkish and Russian, Romaji for Japanese, and Pinyin for Chinese.
 
 ## First start
 

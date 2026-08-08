@@ -12,6 +12,9 @@ def test_required_language_profiles_exist():
         "English",
         "French",
         "Spanish",
+        "German",
+        "Italian",
+        "Turkish",
         "Russian",
         "Japan",
         "Chine",
@@ -23,6 +26,9 @@ def test_language_profiles_have_distinct_translation_targets():
         "en",
         "fr",
         "es",
+        "de",
+        "it",
+        "tr",
         "ru",
         "ja",
         "zh-CN",
@@ -34,6 +40,9 @@ def test_language_profiles_have_expected_file_suffixes():
         "English": "en",
         "French": "fr",
         "Spanish": "es",
+        "German": "de",
+        "Italian": "it",
+        "Turkish": "tr",
         "Russian": "ru",
         "Japan": "jp",
         "Chine": "zh",
@@ -41,7 +50,15 @@ def test_language_profiles_have_expected_file_suffixes():
 
 
 def test_european_languages_use_ipa_profiles():
-    european = {"English", "French", "Spanish", "Russian"}
+    european = {
+        "English",
+        "French",
+        "Spanish",
+        "German",
+        "Italian",
+        "Turkish",
+        "Russian",
+    }
     assert {
         profile.key: profile.transcription_mode
         for profile in LANGUAGES
@@ -50,8 +67,25 @@ def test_european_languages_use_ipa_profiles():
         "English": "ipa_en",
         "French": "ipa_fr",
         "Spanish": "ipa_es",
+        "German": "ipa_de",
+        "Italian": "ipa_it",
+        "Turkish": "ipa_tr",
         "Russian": "ipa_ru",
     }
+
+
+def test_new_language_profiles_use_expected_edge_voices():
+    expected = {
+        "German": ("de-DE-KatjaNeural", "de-"),
+        "Italian": ("it-IT-ElsaNeural", "it-"),
+        "Turkish": ("tr-TR-EmelNeural", "tr-"),
+    }
+
+    for key, (voice, prefix) in expected.items():
+        profile = get_language(key)
+        assert profile.default_voice == voice
+        assert profile.voice_prefix == prefix
+        assert all(item["Locale"].startswith(prefix) for item in profile.fallback_voices)
 
 
 def test_russian_profile_uses_russian_edge_voices():

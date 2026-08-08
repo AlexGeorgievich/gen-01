@@ -309,6 +309,9 @@ class MainWindow(QMainWindow):
             "ipa_en": "IPA (English)",
             "ipa_fr": "IPA (French)",
             "ipa_es": "IPA (Spanish)",
+            "ipa_de": "IPA (German)",
+            "ipa_it": "IPA (Italian)",
+            "ipa_tr": "IPA (Turkish)",
             "ipa_ru": "IPA (Russian)",
         }
         mode_names_ru = {**mode_names_en, "pinyin": "пиньинь", "romaji": "ромадзи"}

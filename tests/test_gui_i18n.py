@@ -2,6 +2,7 @@ import os
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
+import pytest
 from PySide6.QtWidgets import (
     QApplication,
     QCheckBox,
@@ -33,6 +34,9 @@ def test_gui_defaults_to_english_and_can_be_retranslated_to_russian(tmp_path) ->
     assert window.language_combo.itemText(window.language_combo.findData("Japan")) == (
         "Japanese"
     )
+    assert window.language_combo.itemText(window.language_combo.findData("German")) == (
+        "German"
+    )
 
     window.preferences.interface_language = "ru"
     window._apply_interface_language()
@@ -40,6 +44,36 @@ def test_gui_defaults_to_english_and_can_be_retranslated_to_russian(tmp_path) ->
     assert window.windowTitle() == "VoiceGun"
     assert window.open_button.text() == "Открыть…"
     assert window.source_title.text() == "Исходный текст"
+    assert window.language_combo.itemText(window.language_combo.findData("German")) == (
+        "Немецкий"
+    )
+    window._dirty = False
+    window.close()
+
+
+@pytest.mark.parametrize(
+    ("language", "voice"),
+    (
+        ("German", "de-DE-KatjaNeural"),
+        ("Italian", "it-IT-ElsaNeural"),
+        ("Turkish", "tr-TR-EmelNeural"),
+    ),
+)
+def test_gui_switches_to_new_language_module_and_creates_its_directory(
+    tmp_path,
+    language,
+    voice,
+) -> None:
+    _app()
+    repository = SessionRepository(tmp_path)
+    window = MainWindow(repository)
+
+    window.language_combo.setCurrentIndex(window.language_combo.findData(language))
+
+    assert window.current_language.key == language
+    assert window.selected_voice() == voice
+    assert repository.language_directory(window.current_language).is_dir()
+    assert window.transcription_title.text().endswith(f"IPA ({language})")
     window._dirty = False
     window.close()
 

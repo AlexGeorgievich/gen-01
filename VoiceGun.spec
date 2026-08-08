@@ -11,9 +11,23 @@ datas = [
     ("docs/USER_GUIDE_RU.md", "docs"),
 ]
 binaries = []
-hiddenimports = ["gruut_lang_en", "gruut_lang_fr", "gruut_lang_es"]
+hiddenimports = [
+    "gruut_lang_en",
+    "gruut_lang_fr",
+    "gruut_lang_es",
+    "gruut_lang_de",
+    "gruut_lang_it",
+]
 
-for package in ("gruut", "gruut_lang_en", "gruut_lang_fr", "gruut_lang_es", "pykakasi"):
+for package in (
+    "gruut",
+    "gruut_lang_en",
+    "gruut_lang_fr",
+    "gruut_lang_es",
+    "gruut_lang_de",
+    "gruut_lang_it",
+    "pykakasi",
+):
     for source, destination in collect_data_files(package):
         # VoiceGun uses gruut's native lexicon/G2P model. The duplicate eSpeak
         # databases are not selected by the application and add about 70 MB.

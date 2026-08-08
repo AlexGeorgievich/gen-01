@@ -7,3 +7,5 @@ gruut>=2.4,<3
 gruut-lang-en>=2,<3
 gruut-lang-fr>=2,<3
 gruut-lang-es>=2,<3
+gruut-lang-de>=2,<3
+gruut-lang-it>=2,<3

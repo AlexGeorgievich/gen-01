@@ -1,5 +1,11 @@
 import gpt01.transcription as transcription
-from gpt01.transcription import to_ipa, to_pinyin, to_romaji, transcribe
+from gpt01.transcription import (
+    to_ipa,
+    to_pinyin,
+    to_romaji,
+    to_turkish_ipa,
+    transcribe,
+)
 
 
 def test_empty_text():
@@ -35,6 +41,21 @@ def test_french_uses_broad_ipa():
 
 def test_spanish_uses_broad_ipa_with_stress():
     assert transcribe("mesa gracias", "ipa_es") == "/ˈmesa ˈgɾaθʝas/"
+
+
+def test_german_uses_broad_ipa():
+    assert transcribe("Guten Tag", "ipa_de") == "/guːtən taːk/"
+
+
+def test_italian_uses_broad_ipa():
+    assert transcribe("Buongiorno tavolo", "ipa_it") == "/bwoˈnd͡ʒorno ˈtavolo/"
+
+
+def test_turkish_uses_broad_ipa_and_preserves_line_positions():
+    assert to_turkish_ipa("Merhaba, dünya!\n\nÇay ve iyi") == (
+        "/meɾhaba, dynja!/\n\n/tʃaj ve iji/"
+    )
+    assert transcribe("dağ", "ipa_tr") == "/daː/"
 
 
 def test_russian_uses_broad_phonemic_ipa():
