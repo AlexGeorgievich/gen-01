@@ -17,6 +17,8 @@ $privateRootNames = @(
     "language_selection.json",
     "app_state.json",
     "last_audio.mp3",
+    "last_audio.json",
+    "last_audio.srt",
     "voicegun.log",
     ".migration-v1.json"
 )
@@ -87,7 +89,16 @@ finally {
     $zip.Dispose()
 }
 
-$hash = (Get-FileHash -LiteralPath $archivePath -Algorithm SHA256).Hash.ToLowerInvariant()
+$sha256 = [System.Security.Cryptography.SHA256]::Create()
+$archiveStream = [System.IO.File]::OpenRead($archivePath)
+try {
+    $hashBytes = $sha256.ComputeHash($archiveStream)
+    $hash = [System.BitConverter]::ToString($hashBytes).Replace("-", "").ToLowerInvariant()
+}
+finally {
+    $archiveStream.Dispose()
+    $sha256.Dispose()
+}
 "$hash  $archiveName" | Set-Content -LiteralPath $checksumPath -Encoding ascii
 
 $archive = Get-Item -LiteralPath $archivePath

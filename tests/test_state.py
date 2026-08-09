@@ -1,5 +1,6 @@
 import json
 
+from gpt01.preferences import AudioPreparationMode
 from gpt01.state import AppState, load_app_state, save_app_state
 
 
@@ -10,8 +11,10 @@ def test_state_round_trip(tmp_path):
         translation="你好",
         transcription="nǐ hǎo",
         selected_voice="zh-CN-XiaoxiaoNeural",
+        source_visible=False,
         transcription_visible=False,
         translation_window_visible=False,
+        panels_swapped=True,
         splitter_sizes=[600, 0, 600],
         window_geometry="Z2VvbWV0cnk=",
         volume=0.5,
@@ -20,6 +23,7 @@ def test_state_round_trip(tmp_path):
         tts_rate=20,
         tts_pitch=-10,
         tts_volume=15,
+        audio_preparation_mode=AudioPreparationMode.COMPLETE_PACKAGE.value,
     )
     save_app_state(path, expected)
     assert load_app_state(path) == expected
@@ -73,3 +77,16 @@ def test_tts_settings_are_clamped_when_loading(tmp_path):
         "pitch": "-100Hz",
         "volume": "+0%",
     }
+
+
+def test_audio_preparation_mode_defaults_to_fast_and_is_validated(tmp_path):
+    missing = tmp_path / "missing.json"
+    invalid = tmp_path / "invalid.json"
+    invalid.write_text('{"audio_preparation_mode": "unknown"}', encoding="utf-8")
+
+    assert load_app_state(missing).audio_preparation_mode == (
+        AudioPreparationMode.FAST_LINE.value
+    )
+    assert load_app_state(invalid).audio_preparation_mode == (
+        AudioPreparationMode.FAST_LINE.value
+    )

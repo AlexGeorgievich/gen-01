@@ -50,8 +50,46 @@ _STRINGS: dict[str, tuple[str, str]] = {
     "reset": ("Reset", "Сброс"),
     "hide_translation": ("Hide translation", "Скрыть перевод"),
     "show_translation": ("Show translation", "Показать перевод"),
+    "hide_source": ("Hide source text", "Скрыть исходный текст"),
+    "show_source": ("Show source text", "Показать исходный текст"),
     "hide_transcription": ("Hide transcription", "Скрыть транскрипцию"),
     "show_transcription": ("Show transcription", "Показать транскрипцию"),
+    "switch_windows": ("Switch windows", "Переключить окна"),
+    "cards": ("Cards", "Карточки"),
+    "cards_title": ("Learning cards", "Учебные карточки"),
+    "cards_all_badge": ("ALL LINES", "ВСЕ СТРОКИ"),
+    "cards_ab_badge": (
+        "A–B · lines {start}–{end}",
+        "A–B · строки {start}–{end}",
+    ),
+    "cards_navigation_hint": (
+        "← → or < > — navigate and speak",
+        "← → или < > — переход и озвучивание",
+    ),
+    "cards_space_line_hint": (
+        "Space — repeat this line",
+        "Space — повторить текущую строку",
+    ),
+    "cards_space_range_hint": (
+        "Space — play one A–B cycle",
+        "Space — озвучить один цикл A–B",
+    ),
+    "last_window_required": (
+        "At least one text window must remain visible.",
+        "Хотя бы одно текстовое окно должно оставаться открытым.",
+    ),
+    "windows_switched": (
+        "Learning windows switched.",
+        "Учебные окна переключены.",
+    ),
+    "windows_restored": (
+        "Original window order restored.",
+        "Исходный порядок окон восстановлен.",
+    ),
+    "no_card_lines": (
+        "There are no non-empty source lines for cards.",
+        "Нет непустых строк исходного текста для карточек.",
+    ),
     "mark_a_tip": (
         "Set the source caret line as marker A",
         "Установить строку курсора как метку A",
@@ -84,6 +122,14 @@ _STRINGS: dict[str, tuple[str, str]] = {
     "auto_detect": ("Auto-detect", "Автоопределение"),
     "source_language": ("Source text language:", "Базовый язык первого окна:"),
     "font_size": ("Text editor font size:", "Размер шрифта текстовых окон:"),
+    "card_primary_font_size": (
+        "Card primary text size:",
+        "Размер основного текста карточки:",
+    ),
+    "card_secondary_font_size": (
+        "Card additional text size:",
+        "Размер дополнительного текста карточки:",
+    ),
     "french_articles": ("French articles:", "Французские артикли:"),
     "articles_auto": ("Automatic (study form)", "Автоматически (учебная форма)"),
     "articles_definite": ("Definite: le, la, l’, les", "Определённые: le, la, l’, les"),
@@ -92,6 +138,12 @@ _STRINGS: dict[str, tuple[str, str]] = {
     "tts_rate": ("TTS rate:", "Скорость TTS:"),
     "tts_pitch": ("TTS pitch:", "Высота тона TTS:"),
     "tts_volume": ("TTS volume:", "Громкость синтеза TTS:"),
+    "audio_preparation_mode": (
+        "Audio preparation mode:",
+        "Режим подготовки аудио:",
+    ),
+    "audio_mode_line": ("Fast line-by-line", "Быстрый построчный"),
+    "audio_mode_package": ("Complete audio package", "Полный аудиопакет"),
     "settings_saved": ("Settings saved.", "Настройки сохранены."),
     "settings_save_failed": (
         "Could not save settings: {error}",
@@ -187,6 +239,18 @@ _STRINGS: dict[str, tuple[str, str]] = {
         "Translated lines: {lines}; parts: {parts}.",
         "Переведено строк: {lines}; частей: {parts}.",
     ),
+    "audio_package_progress": (
+        "Audio line {current} of {total}…",
+        "Аудио: строка {current} из {total}…",
+    ),
+    "translation_audio_complete": (
+        "Translation, MP3, timestamps and SRT are ready.",
+        "Перевод, MP3, временные метки и SRT готовы.",
+    ),
+    "translation_audio_failed": (
+        "Translation is ready, but MP3/timestamps could not be created: {error}",
+        "Перевод готов, но не удалось создать MP3 и временные метки: {error}",
+    ),
     "playback_error": ("Playback error: {message}", "Ошибка воспроизведения: {message}"),
     "line_synthesis": ("Line synthesis: {text}", "Синтез строки: {text}"),
     "line_result": ("Line: {text}", "Строка: {text}"),
@@ -239,6 +303,10 @@ _STRINGS: dict[str, tuple[str, str]] = {
         "Последовательное озвучивание остановлено.",
     ),
     "audio_saved": ("Audio saved: {path}", "Аудио сохранено: {path}"),
+    "audio_package_saved": (
+        "Saved: {mp3}; {json}; {srt}",
+        "Сохранено: {mp3}; {json}; {srt}",
+    ),
     "audio_stem": ("voice", "озвучка"),
     "translation_stem": ("translation", "перевод"),
     "subtitles_stem": ("subtitles", "субтитры"),

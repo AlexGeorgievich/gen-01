@@ -5,18 +5,21 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
 
+from .preferences import AudioPreparationMode
 from .tts import TtsSettings
 
 
 @dataclass(slots=True)
 class AppState:
-    version: int = 3
+    version: int = 5
     original: str = ""
     translation: str = ""
     transcription: str = ""
     selected_voice: str = ""
+    source_visible: bool = True
     transcription_visible: bool = True
     translation_window_visible: bool = True
+    panels_swapped: bool = False
     splitter_sizes: list[int] = field(default_factory=lambda: [420, 420, 420])
     window_geometry: str = ""
     volume: float = 0.9
@@ -25,6 +28,7 @@ class AppState:
     tts_rate: int = 0
     tts_pitch: int = 0
     tts_volume: int = 0
+    audio_preparation_mode: str = AudioPreparationMode.FAST_LINE.value
 
     @property
     def tts_settings(self) -> TtsSettings:
@@ -41,17 +45,22 @@ class AppState:
             data.get("tts_pitch", 0),
             data.get("tts_volume", 0),
         )
+        audio_preparation_mode = AudioPreparationMode.parse(
+            data.get("audio_preparation_mode", AudioPreparationMode.FAST_LINE.value)
+        )
         return cls(
             original=str(data.get("original", "")),
             translation=str(data.get("translation", "")),
             transcription=str(data.get("transcription", data.get("transliteration", ""))),
             selected_voice=str(data.get("selected_voice", "")),
+            source_visible=bool(data.get("source_visible", True)),
             transcription_visible=bool(
                 data.get("transcription_visible", data.get("translation_visible", True))
             ),
             translation_window_visible=bool(
                 data.get("translation_window_visible", True)
             ),
+            panels_swapped=bool(data.get("panels_swapped", False)),
             splitter_sizes=sizes,
             window_geometry=str(data.get("window_geometry", "")),
             volume=min(1.0, max(0.0, float(data.get("volume", 0.9)))),
@@ -60,6 +69,7 @@ class AppState:
             tts_rate=tts.rate,
             tts_pitch=tts.pitch,
             tts_volume=tts.volume,
+            audio_preparation_mode=audio_preparation_mode.value,
         )
 
 

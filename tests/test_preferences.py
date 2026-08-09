@@ -47,6 +47,15 @@ def test_font_size_is_clamped():
     assert Preferences.from_dict({"editor_font_size": 100}).editor_font_size == 32
 
 
+def test_card_font_sizes_are_clamped():
+    preferences = Preferences.from_dict(
+        {"card_primary_font_size": 100, "card_secondary_font_size": 2}
+    )
+
+    assert preferences.card_primary_font_size == 48
+    assert preferences.card_secondary_font_size == 12
+
+
 def test_invalid_french_article_mode_falls_back_to_auto():
     preferences = Preferences.from_dict({"french_article_mode": "invalid"})
 

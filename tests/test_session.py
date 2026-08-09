@@ -1,7 +1,7 @@
 from pathlib import Path
 
 from gpt01.languages import get_language
-from gpt01.preferences import Preferences
+from gpt01.preferences import AudioPreparationMode, Preferences
 from gpt01.session import (
     MIGRATION_MARKER_NAME,
     SessionRepository,
@@ -69,6 +69,23 @@ def test_session_round_trip(tmp_path):
     assert repository.load_session(profile).state == expected
 
 
+def test_audio_mode_is_stored_independently_for_each_language(tmp_path):
+    repository = SessionRepository(tmp_path)
+    french = get_language("French")
+    spanish = get_language("Spanish")
+    repository.save_session(
+        french,
+        AppState(
+            audio_preparation_mode=AudioPreparationMode.COMPLETE_PACKAGE.value
+        ),
+        None,
+    )
+    repository.save_session(spanish, AppState(), None)
+
+    assert repository.load_session(french).state.audio_preparation_mode == "package"
+    assert repository.load_session(spanish).state.audio_preparation_mode == "line"
+
+
 def test_saving_session_does_not_mutate_caller_state(tmp_path):
     repository = SessionRepository(tmp_path)
     profile = get_language("French")
@@ -80,6 +97,38 @@ def test_saving_session_does_not_mutate_caller_state(tmp_path):
 
     assert state.audio_file == ""
     assert repository.load_session(profile).state.audio_file == "last_audio.mp3"
+
+
+def test_saving_session_copies_audio_timing_companions(tmp_path):
+    repository = SessionRepository(tmp_path)
+    profile = get_language("English")
+    audio = tmp_path / "prepared.mp3"
+    audio.write_bytes(b"audio")
+    audio.with_suffix(".json").write_text('{"version": 1}', encoding="utf-8")
+    audio.with_suffix(".srt").write_text("subtitle", encoding="utf-8")
+
+    repository.save_session(profile, AppState(original="lesson"), audio)
+
+    assert repository.audio_path(profile).read_bytes() == b"audio"
+    assert repository.audio_manifest_path(profile).read_text(encoding="utf-8") == (
+        '{"version": 1}'
+    )
+    assert repository.audio_srt_path(profile).read_text(encoding="utf-8") == "subtitle"
+
+
+def test_saving_audio_without_timings_removes_stale_companions(tmp_path):
+    repository = SessionRepository(tmp_path)
+    profile = get_language("English")
+    repository.ensure_language_directory(profile)
+    repository.audio_manifest_path(profile).write_text("stale", encoding="utf-8")
+    repository.audio_srt_path(profile).write_text("stale", encoding="utf-8")
+    audio = tmp_path / "single-line.mp3"
+    audio.write_bytes(b"audio")
+
+    repository.save_session(profile, AppState(original="lesson"), audio)
+
+    assert not repository.audio_manifest_path(profile).exists()
+    assert not repository.audio_srt_path(profile).exists()
 
 
 def test_preferences_round_trip(tmp_path):

@@ -92,6 +92,8 @@ class SessionRepository:
             "language_selection.json",
             "app_state.json",
             "last_audio.mp3",
+            "last_audio.json",
+            "last_audio.srt",
         ):
             self._copy_missing_file(self.legacy_root / name, self.application_root / name)
 
@@ -135,6 +137,12 @@ class SessionRepository:
 
     def audio_path(self, profile: LanguageProfile) -> Path:
         return self.language_directory(profile) / "last_audio.mp3"
+
+    def audio_manifest_path(self, profile: LanguageProfile) -> Path:
+        return self.language_directory(profile) / "last_audio.json"
+
+    def audio_srt_path(self, profile: LanguageProfile) -> Path:
+        return self.language_directory(profile) / "last_audio.srt"
 
     def voice_cache_path(self, profile: LanguageProfile) -> Path:
         return self.language_directory(profile) / "voices_cache.json"
@@ -205,6 +213,14 @@ class SessionRepository:
         if current_audio and current_audio.is_file():
             if current_audio.resolve() != persistent_audio.resolve():
                 shutil.copyfile(current_audio, persistent_audio)
+            for source, target in (
+                (current_audio.with_suffix(".json"), self.audio_manifest_path(profile)),
+                (current_audio.with_suffix(".srt"), self.audio_srt_path(profile)),
+            ):
+                if source.is_file() and source.resolve() != target.resolve():
+                    shutil.copyfile(source, target)
+                elif not source.is_file():
+                    target.unlink(missing_ok=True)
             audio_file = persistent_audio.name
         save_app_state(self.state_path(profile), replace(state, audio_file=audio_file))
 
@@ -215,6 +231,7 @@ class SessionRepository:
         try:
             temp_root = Path(tempfile.gettempdir()).resolve()
             if path.parent.resolve() == temp_root and path.name.startswith("gpt01_"):
-                path.unlink(missing_ok=True)
+                for generated in (path, path.with_suffix(".json"), path.with_suffix(".srt")):
+                    generated.unlink(missing_ok=True)
         except OSError:
             LOGGER.warning("Could not remove temporary audio: %s", path)

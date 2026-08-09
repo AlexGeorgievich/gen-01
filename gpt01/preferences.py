@@ -2,11 +2,24 @@ from __future__ import annotations
 
 import json
 from dataclasses import asdict, dataclass
+from enum import StrEnum
 from pathlib import Path
 from typing import Any
 
 from .french_grammar import FrenchArticleMode
 from .languages import LANGUAGE_BY_KEY
+
+
+class AudioPreparationMode(StrEnum):
+    FAST_LINE = "line"
+    COMPLETE_PACKAGE = "package"
+
+    @classmethod
+    def parse(cls, value: object) -> AudioPreparationMode:
+        try:
+            return cls(str(value))
+        except ValueError:
+            return cls.FAST_LINE
 
 
 @dataclass(slots=True)
@@ -17,6 +30,8 @@ class Preferences:
     last_open_directory: str = ""
     last_export_directory: str = ""
     interface_language: str = "en"
+    card_primary_font_size: int = 24
+    card_secondary_font_size: int = 18
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> Preferences:
@@ -27,6 +42,14 @@ class Preferences:
             font_size = int(data.get("editor_font_size", 11))
         except (TypeError, ValueError):
             font_size = 11
+        try:
+            card_primary_font_size = int(data.get("card_primary_font_size", 24))
+        except (TypeError, ValueError):
+            card_primary_font_size = 24
+        try:
+            card_secondary_font_size = int(data.get("card_secondary_font_size", 18))
+        except (TypeError, ValueError):
+            card_secondary_font_size = 18
         last_open_directory = data.get("last_open_directory", "")
         last_export_directory = data.get("last_export_directory", "")
         french_article_mode = FrenchArticleMode.parse(
@@ -46,6 +69,8 @@ class Preferences:
                 last_export_directory.strip() if isinstance(last_export_directory, str) else ""
             ),
             interface_language=interface_language,
+            card_primary_font_size=min(48, max(16, card_primary_font_size)),
+            card_secondary_font_size=min(40, max(12, card_secondary_font_size)),
         )
 
 

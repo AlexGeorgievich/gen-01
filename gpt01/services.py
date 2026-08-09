@@ -30,6 +30,16 @@ class SpeechProvider(Protocol):
         settings: TtsSettings | None = None,
     ) -> None: ...
 
+    def synthesize_timed(
+        self,
+        text: str,
+        voice: str,
+        output: Path,
+        cancelled: Callable[[], bool] | None = None,
+        *,
+        settings: TtsSettings | None = None,
+    ) -> int: ...
+
 
 class GoogleTranslationProvider:
     _ERROR_RESPONSE = re.compile(
@@ -131,6 +141,53 @@ class EdgeSpeechProvider:
             if cancelled and cancelled():
                 output.unlink(missing_ok=True)
                 raise OperationCancelled("Синтез речи отменён.")
+        except OperationCancelled:
+            output.unlink(missing_ok=True)
+            raise
+        except Exception as exc:
+            output.unlink(missing_ok=True)
+            raise NetworkServiceError(f"Сервис синтеза речи недоступен: {exc}") from exc
+
+    def synthesize_timed(
+        self,
+        text: str,
+        voice: str,
+        output: Path,
+        cancelled: Callable[[], bool] | None = None,
+        *,
+        settings: TtsSettings | None = None,
+    ) -> int:
+        active_settings = settings or TtsSettings()
+
+        async def run() -> int:
+            last_boundary_end = 0
+            communicate = edge_tts.Communicate(
+                text=text,
+                voice=voice,
+                **active_settings.edge_options(),
+            )
+            with output.open("wb") as audio:
+                async with asyncio.timeout(self.timeout):
+                    async for chunk in communicate.stream():
+                        if cancelled and cancelled():
+                            raise OperationCancelled("Синтез речи отменён.")
+                        if chunk["type"] == "audio":
+                            audio.write(chunk["data"])
+                        elif chunk["type"] == "WordBoundary":
+                            boundary_end = int(chunk["offset"]) + int(chunk["duration"])
+                            last_boundary_end = max(last_boundary_end, boundary_end)
+            if last_boundary_end:
+                return max(1, (last_boundary_end + 9_999) // 10_000)
+            return max(1, len(text.split()) * 400)
+
+        try:
+            if cancelled and cancelled():
+                raise OperationCancelled("Синтез речи отменён.")
+            duration_ms = asyncio.run(run())
+            if cancelled and cancelled():
+                output.unlink(missing_ok=True)
+                raise OperationCancelled("Синтез речи отменён.")
+            return duration_ms
         except OperationCancelled:
             output.unlink(missing_ok=True)
             raise

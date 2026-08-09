@@ -18,15 +18,8 @@ if errorlevel 1 (
 
 copy /Y "LICENSE" "dist\VoiceGun\LICENSE" >nul
 copy /Y "README.md" "dist\VoiceGun\README.md" >nul
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File "tools\package_windows.ps1"
-if errorlevel 1 (
-    echo.
-    echo Packaging failed. See the messages above.
-    pause
-    exit /b 1
-)
 
 echo.
 echo Build completed: dist\VoiceGun\VoiceGun.exe
-echo Package completed: release\VoiceGun-0.4.0-windows-x64.zip
+echo Run package_windows.bat separately when a ZIP archive is required.
 exit /b 0

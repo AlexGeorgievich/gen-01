@@ -4,6 +4,7 @@ import asyncio
 import base64
 import logging
 import os
+import shutil
 import sys
 import tempfile
 from collections.abc import Callable
@@ -11,7 +12,7 @@ from pathlib import Path
 from typing import Any
 
 import edge_tts
-from PySide6.QtCore import QByteArray, QEvent, QObject, QUrl, Slot
+from PySide6.QtCore import QByteArray, QEvent, QObject, Qt, QUrl, Slot
 from PySide6.QtGui import (
     QCloseEvent,
     QColor,
@@ -50,7 +51,8 @@ from PySide6.QtWidgets import (
 
 from gpt01.audio_cache import LineAudioCache
 from gpt01.batch import BatchProcessor, BatchResult
-from gpt01.errors import AppError
+from gpt01.cards import CardField, FlashcardsDialog
+from gpt01.errors import AppError, OperationCancelled
 from gpt01.exporting import (
     ExportKind,
     ExportLayout,
@@ -62,7 +64,7 @@ from gpt01.language_controller import LanguageController
 from gpt01.languages import LANGUAGES
 from gpt01.models import Document, SubtitleCue, TranslationRow
 from gpt01.playback import PlaybackSequence
-from gpt01.preferences import Preferences
+from gpt01.preferences import AudioPreparationMode, Preferences
 from gpt01.rows import build_translation_rows, rows_between
 from gpt01.services import EdgeSpeechProvider
 from gpt01.session import SessionRepository
@@ -73,6 +75,12 @@ from gpt01.structured_translation import (
     translate_preserving_layout,
 )
 from gpt01.tasks import TaskManager
+from gpt01.timed_audio import (
+    TimedAudioManifest,
+    TimedAudioPackage,
+    build_timed_audio_package,
+    load_manifest,
+)
 from gpt01.tts import TtsSettings
 from gpt01.version import (
     APP_AUTHOR,
@@ -130,8 +138,11 @@ class MainWindow(QMainWindow):
         self._sequence_audio_parts: list[Path] = []
         self._ab_repeat_ready = False
         self.ab_audio_cache = LineAudioCache()
+        self.card_audio_cache = LineAudioCache()
         self.sequence = PlaybackSequence()
         self._switching_language = False
+        self.panels_swapped = False
+        self._active_cards_dialog: FlashcardsDialog | None = None
         self.repository = repository or SessionRepository.for_application(APPLICATION_ROOT)
         self.preferences = self.repository.load_preferences()
         self.language_controller = LanguageController(
@@ -143,6 +154,12 @@ class MainWindow(QMainWindow):
         self.current_source_path: Path | None = None
         self.subtitle_cues: tuple[SubtitleCue, ...] = ()
         self.audio_path: Path | None = None
+        self.audio_manifest_path: Path | None = None
+        self.audio_srt_path: Path | None = None
+        self.timed_manifest: TimedAudioManifest | None = None
+        self._timed_playback_active = False
+        self._timed_playback_scope: str | None = None
+        self._timed_stop_ms: int | None = None
         self._audio_is_complete_document = False
         self.player = QMediaPlayer(self)
         self.audio_output = QAudioOutput(self)
@@ -150,6 +167,7 @@ class MainWindow(QMainWindow):
         self.audio_output.setVolume(0.9)
         self.speech = EdgeSpeechProvider(TTS_TIMEOUT_SECONDS)
         self.tts_settings = TtsSettings()
+        self.audio_preparation_mode = AudioPreparationMode.FAST_LINE.value
 
         self.source_edit = QTextEdit()
         self.source_edit.setPlaceholderText(self._t("source_placeholder"))
@@ -204,6 +222,11 @@ class MainWindow(QMainWindow):
         self.translation_toggle_button = QPushButton("−")
         self.translation_toggle_button.setToolTip(self._t("hide_translation"))
         self.translation_toggle_button.setFixedWidth(32)
+        self.source_toggle_button = QPushButton("−")
+        self.source_toggle_button.setToolTip(self._t("hide_source"))
+        self.source_toggle_button.setFixedWidth(32)
+        self.switch_windows_button = QPushButton(self._t("switch_windows"))
+        self.cards_button = QPushButton(self._t("cards"))
         self.mark_a_button = QPushButton("A")
         self.mark_a_button.setToolTip(self._t("mark_a_tip"))
         self.mark_b_button = QPushButton("B")
@@ -221,6 +244,7 @@ class MainWindow(QMainWindow):
             self.reset_ab_button,
         ):
             button.setMinimumWidth(48)
+            button.setFocusPolicy(Qt.FocusPolicy.NoFocus)
 
         self._build_ui()
         self._populate_languages()
@@ -354,12 +378,15 @@ class MainWindow(QMainWindow):
         self.play_ab_button.setToolTip(self._t("play_ab_tip"))
         self.reset_ab_button.setText(self._t("reset"))
         self.reset_ab_button.setToolTip(self._t("reset_ab_tip"))
+        self.switch_windows_button.setText(self._t("switch_windows"))
+        self.cards_button.setText(self._t("cards"))
         self._populate_languages()
         cached_voices = self._load_cached_voices()
         self.voice_status.setText(self._t("cached_voices", count=len(cached_voices)))
         self._update_language_labels()
         self._set_translation_window_visible(not self.translation_box.isHidden())
         self._set_transcription_window_visible(not self.transcription_box.isHidden())
+        self._set_source_window_visible(not self.source_box.isHidden())
 
     @Slot()
     def _on_language_changed(self) -> None:
@@ -423,11 +450,12 @@ class MainWindow(QMainWindow):
         self.source_box = QGroupBox()
         self.source_box.setObjectName("sourcePanel")
         source_layout = QVBoxLayout(self.source_box)
-        source_header = QHBoxLayout()
-        source_header.addWidget(self.source_title)
-        source_header.addStretch(1)
-        source_header.addWidget(self.source_clear_button)
-        source_layout.addLayout(source_header)
+        self.source_header = QHBoxLayout()
+        self.source_header.addWidget(self.source_title)
+        self.source_header.addStretch(1)
+        self.source_header.addWidget(self.source_toggle_button)
+        self.source_header.addWidget(self.source_clear_button)
+        source_layout.addLayout(self.source_header)
         source_layout.addWidget(self.source_edit)
 
         self.translation_box = QGroupBox()
@@ -462,6 +490,9 @@ class MainWindow(QMainWindow):
         window_controls = QHBoxLayout()
         self.collapsed_panels_layout = QHBoxLayout()
         window_controls.addLayout(self.collapsed_panels_layout)
+        window_controls.addWidget(self.switch_windows_button)
+        window_controls.addWidget(self.cards_button)
+        window_controls.addSpacing(10)
         self.range_control_label = QLabel(self._t("playback_range"))
         self.range_control_label.setStyleSheet("font-weight: 600;")
         window_controls.addWidget(self.range_control_label)
@@ -582,6 +613,9 @@ class MainWindow(QMainWindow):
         self.reload_voices_button.clicked.connect(self.load_voices)
         self.transcription_toggle_button.clicked.connect(self._toggle_transcription_window)
         self.translation_toggle_button.clicked.connect(self._toggle_translation_window)
+        self.source_toggle_button.clicked.connect(self._toggle_source_window)
+        self.switch_windows_button.clicked.connect(self.switch_editor_windows)
+        self.cards_button.clicked.connect(self.open_cards)
         self.mark_a_button.clicked.connect(self.set_range_marker_a)
         self.mark_b_button.clicked.connect(self.set_range_marker_b)
         self.play_ab_button.clicked.connect(self.play_ab_range)
@@ -605,6 +639,7 @@ class MainWindow(QMainWindow):
         self.help_shortcut.activated.connect(self.open_help)
         self.player.playbackStateChanged.connect(self._playback_changed)
         self.player.mediaStatusChanged.connect(self._media_status_changed)
+        self.player.positionChanged.connect(self._timed_position_changed)
         self.player.errorOccurred.connect(
             lambda _error, message: self._show_error(
                 self._t("playback_error", message=message)
@@ -636,6 +671,18 @@ class MainWindow(QMainWindow):
         font_size.setSuffix(" pt")
         font_size.setValue(self.preferences.editor_font_size)
 
+        card_primary_font_size = QSpinBox(dialog)
+        card_primary_font_size.setObjectName("cardPrimaryFontSizeSpin")
+        card_primary_font_size.setRange(16, 48)
+        card_primary_font_size.setSuffix(" pt")
+        card_primary_font_size.setValue(self.preferences.card_primary_font_size)
+
+        card_secondary_font_size = QSpinBox(dialog)
+        card_secondary_font_size.setObjectName("cardSecondaryFontSizeSpin")
+        card_secondary_font_size.setRange(12, 40)
+        card_secondary_font_size.setSuffix(" pt")
+        card_secondary_font_size.setValue(self.preferences.card_secondary_font_size)
+
         french_articles = QComboBox(dialog)
         french_articles.addItem(self._t("articles_auto"), FrenchArticleMode.AUTO.value)
         french_articles.addItem(self._t("articles_definite"), FrenchArticleMode.DEFINITE.value)
@@ -646,6 +693,19 @@ class MainWindow(QMainWindow):
         french_articles.addItem(self._t("articles_off"), FrenchArticleMode.OFF.value)
         article_index = french_articles.findData(self.preferences.french_article_mode)
         french_articles.setCurrentIndex(max(0, article_index))
+
+        audio_mode = QComboBox(dialog)
+        audio_mode.setObjectName("audioPreparationModeCombo")
+        audio_mode.addItem(
+            self._t("audio_mode_line"),
+            AudioPreparationMode.FAST_LINE.value,
+        )
+        audio_mode.addItem(
+            self._t("audio_mode_package"),
+            AudioPreparationMode.COMPLETE_PACKAGE.value,
+        )
+        audio_mode_index = audio_mode.findData(self.audio_preparation_mode)
+        audio_mode.setCurrentIndex(max(0, audio_mode_index))
 
         speech_rate = QSpinBox(dialog)
         speech_rate.setRange(-100, 100)
@@ -665,7 +725,10 @@ class MainWindow(QMainWindow):
         form.addRow(self._t("interface_language"), interface_combo)
         form.addRow(self._t("source_language"), source_combo)
         form.addRow(self._t("font_size"), font_size)
+        form.addRow(self._t("card_primary_font_size"), card_primary_font_size)
+        form.addRow(self._t("card_secondary_font_size"), card_secondary_font_size)
         form.addRow(self._t("french_articles"), french_articles)
+        form.addRow(self._t("audio_preparation_mode"), audio_mode)
         form.addRow(self._t("tts_rate"), speech_rate)
         form.addRow(self._t("tts_pitch"), speech_pitch)
         form.addRow(self._t("tts_volume"), speech_volume)
@@ -681,6 +744,7 @@ class MainWindow(QMainWindow):
         if dialog.exec() != QDialog.DialogCode.Accepted:
             return
         previous_article_mode = self.preferences.french_article_mode
+        previous_audio_mode = self.audio_preparation_mode
         self.preferences = Preferences(
             source_language_key=str(source_combo.currentData()),
             editor_font_size=font_size.value(),
@@ -688,7 +752,10 @@ class MainWindow(QMainWindow):
             last_open_directory=self.preferences.last_open_directory,
             last_export_directory=self.preferences.last_export_directory,
             interface_language=str(interface_combo.currentData()),
+            card_primary_font_size=card_primary_font_size.value(),
+            card_secondary_font_size=card_secondary_font_size.value(),
         )
+        self.audio_preparation_mode = str(audio_mode.currentData())
         updated_tts_settings = TtsSettings.normalized(
             speech_rate.value(), speech_pitch.value(), speech_volume.value()
         )
@@ -700,7 +767,11 @@ class MainWindow(QMainWindow):
         self.language_controller.select_source(self.preferences.source_language_key)
         self._apply_editor_font_size()
         self._apply_interface_language()
-        if tts_changed or previous_article_mode != self.preferences.french_article_mode:
+        if (
+            tts_changed
+            or previous_article_mode != self.preferences.french_article_mode
+            or previous_audio_mode != self.audio_preparation_mode
+        ):
             self._reset_audio_state()
         try:
             self.repository.save_preferences(self.preferences)
@@ -800,7 +871,9 @@ class MainWindow(QMainWindow):
         self.language_combo.setEnabled(not busy and self.reload_voices_button.isEnabled())
         self.cancel_button.setEnabled(busy)
         playing = self.player.playbackState() == QMediaPlayer.PlaybackState.PlayingState
-        self.stop_button.setEnabled(busy or playing or self.sequence.active)
+        self.stop_button.setEnabled(
+            busy or playing or self.sequence.active or self._timed_playback_active
+        )
         self.replay_button.setEnabled(
             not busy and not self.sequence.active and bool(self.source_edit.toPlainText().strip())
         )
@@ -895,12 +968,24 @@ class MainWindow(QMainWindow):
         if not text.strip():
             QMessageBox.information(self, self.windowTitle(), self._t("enter_source"))
             return
+        voice = self.selected_voice()
+        tts_settings = self.tts_settings
+        language_key = self.current_language.key
+        prepare_complete_package = (
+            self.audio_preparation_mode
+            == AudioPreparationMode.COMPLETE_PACKAGE.value
+        )
 
-        def translate(
+        def translate_and_prepare_audio(
             cancelled: Callable[[], bool],
             report: Callable[[int, int, str], None],
-        ) -> StructuredTranslationResult:
-            return translate_preserving_layout(
+        ) -> tuple[
+            StructuredTranslationResult,
+            str,
+            TimedAudioPackage | None,
+            str,
+        ]:
+            translated = translate_preserving_layout(
                 text,
                 self.translator,
                 cancelled,
@@ -910,22 +995,90 @@ class MainWindow(QMainWindow):
                     self._t("translation_progress", current=current, total=total),
                 ),
             )
+            transcription = self.language_controller.transcribe(translated.text)
+            if not prepare_complete_package:
+                return translated, transcription, None, ""
+            rows = build_translation_rows(text, translated.text, transcription)
+            if not voice:
+                return translated, transcription, None, self._t("voice_not_selected")
+            audio_path, manifest_path, srt_path = self._temporary_audio_package_paths()
+            try:
+                package = build_timed_audio_package(
+                    rows,
+                    audio_path,
+                    manifest_path,
+                    srt_path,
+                    language_key,
+                    voice,
+                    tts_settings,
+                    lambda speech_text, output: self.speech.synthesize_timed(
+                        speech_text,
+                        voice,
+                        output,
+                        cancelled,
+                        settings=tts_settings,
+                    ),
+                    speech_text=self.language_controller.prepare_speech,
+                    progress=lambda current, total: report(
+                        current,
+                        total,
+                        self._t(
+                            "audio_package_progress",
+                            current=current,
+                            total=total,
+                        ),
+                    ),
+                )
+                return translated, transcription, package, ""
+            except OperationCancelled:
+                raise
+            except Exception as exc:
+                return translated, transcription, None, str(exc)
 
         self._run_progress_task(
-            translate,
-            self._set_structured_translation,
+            translate_and_prepare_audio,
+            self._set_translation_audio_result,
             self._t("translation_preparing"),
         )
 
-    def _set_structured_translation(self, result: StructuredTranslationResult) -> None:
-        self._set_translation(result.text)
+    def _set_translation_audio_result(
+        self,
+        result: tuple[
+            StructuredTranslationResult,
+            str,
+            TimedAudioPackage | None,
+            str,
+        ],
+    ) -> None:
+        translation, transcription, package, audio_error = result
+        self._set_translation(translation.text)
+        self.transcription_edit.blockSignals(True)
+        self.transcription_edit.setPlainText(transcription)
+        self.transcription_edit.blockSignals(False)
+        if package:
+            self.audio_path = package.audio_path
+            self.audio_manifest_path = package.manifest_path
+            self.audio_srt_path = package.srt_path
+            self.timed_manifest = package.manifest
+            self._audio_is_complete_document = True
+            self.player.setSource(QUrl.fromLocalFile(str(package.audio_path)))
+            self._update_save_audio_button()
         self.statusBar().showMessage(
             self._t(
-                "translation_complete",
-                lines=result.translated_lines,
-                parts=result.translated_chunks,
+                "translation_audio_complete" if package else "translation_complete",
+                lines=translation.translated_lines,
+                parts=translation.translated_chunks,
             )
         )
+        if audio_error:
+            self._show_error(self._t("translation_audio_failed", error=audio_error))
+
+    @staticmethod
+    def _temporary_audio_package_paths() -> tuple[Path, Path, Path]:
+        fd, filename = tempfile.mkstemp(prefix="gpt01_timed_", suffix=".mp3")
+        os.close(fd)
+        audio_path = Path(filename)
+        return audio_path, audio_path.with_suffix(".json"), audio_path.with_suffix(".srt")
 
     @Slot()
     def load_voices(self) -> None:
@@ -998,15 +1151,10 @@ class MainWindow(QMainWindow):
 
     @Slot()
     def speak_text(self) -> None:
-        rows = build_translation_rows(
-            self.source_edit.toPlainText(),
-            self.translation_edit.toPlainText(),
-            self.transcription_edit.toPlainText(),
-        )
-        if not rows:
-            QMessageBox.information(self, self.windowTitle(), self._t("enter_source"))
-            return
-        self._begin_sequence(rows, "speak")
+        if self._timed_audio_ready():
+            self._start_timed_playback(0, None, "all")
+        else:
+            self._start_sequence()
 
     @Slot()
     def speak_line_at_cursor(self) -> None:
@@ -1037,6 +1185,19 @@ class MainWindow(QMainWindow):
         if not line_text:
             self.statusBar().showMessage(self._t("empty_hover_line"))
             return
+
+        if self._timed_audio_ready() and self.timed_manifest:
+            timed_line = next(
+                (line for line in self.timed_manifest.lines if line.line == line_number),
+                None,
+            )
+            if timed_line:
+                self._start_timed_playback(
+                    timed_line.start_ms,
+                    timed_line.end_ms,
+                    "line",
+                )
+                return
 
         voice = self.selected_voice()
         if not voice:
@@ -1103,6 +1264,9 @@ class MainWindow(QMainWindow):
     def _play_file(self, filename: str) -> None:
         previous_audio = self.audio_path
         self.audio_path = Path(filename)
+        self.audio_manifest_path = None
+        self.audio_srt_path = None
+        self.timed_manifest = None
         self._audio_is_complete_document = False
         self.player.stop()
         self.player.setSource(QUrl())
@@ -1114,7 +1278,7 @@ class MainWindow(QMainWindow):
         if (
             previous_audio
             and previous_audio != self.audio_path
-            and not self.ab_audio_cache.contains(previous_audio)
+            and not self._line_audio_cache_contains(previous_audio)
             and previous_audio not in self._sequence_audio_parts
         ):
             self.repository.delete_temporary_audio(previous_audio)
@@ -1185,7 +1349,51 @@ class MainWindow(QMainWindow):
     def _toggle_translation_window(self) -> None:
         self._set_translation_window_visible(self.translation_box.isHidden())
 
+    @Slot()
+    def _toggle_source_window(self) -> None:
+        self._set_source_window_visible(self.source_box.isHidden())
+
+    def _may_change_panel_visibility(self, panel: QWidget, visible: bool) -> bool:
+        if visible or panel.isHidden():
+            return True
+        visible_count = sum(
+            not item.isHidden()
+            for item in (
+                self.source_box,
+                self.translation_box,
+                self.transcription_box,
+            )
+        )
+        if visible_count > 1:
+            return True
+        self.statusBar().showMessage(self._t("last_window_required"))
+        return False
+
+    def _set_source_window_visible(self, visible: bool) -> None:
+        if not self._may_change_panel_visibility(self.source_box, visible):
+            return
+        self.source_header.removeWidget(self.source_toggle_button)
+        self.collapsed_panels_layout.removeWidget(self.source_toggle_button)
+        if visible:
+            self.source_header.insertWidget(
+                max(0, self.source_header.count() - 1),
+                self.source_toggle_button,
+            )
+        else:
+            self.collapsed_panels_layout.addWidget(self.source_toggle_button)
+        self.source_box.setVisible(visible)
+        self.source_toggle_button.setFixedWidth(32 if visible else 126)
+        self.source_toggle_button.setText(
+            "−" if visible else f"+ {self._t('source_text')}"
+        )
+        self.source_toggle_button.setToolTip(
+            self._t("hide_source") if visible else self._t("show_source")
+        )
+        self._resize_visible_editor_windows()
+
     def _set_transcription_window_visible(self, visible: bool) -> None:
+        if not self._may_change_panel_visibility(self.transcription_box, visible):
+            return
         self.transcription_header.removeWidget(self.transcription_toggle_button)
         self.collapsed_panels_layout.removeWidget(self.transcription_toggle_button)
         if visible:
@@ -1207,6 +1415,8 @@ class MainWindow(QMainWindow):
             self._resize_visible_editor_windows()
 
     def _set_translation_window_visible(self, visible: bool) -> None:
+        if not self._may_change_panel_visibility(self.translation_box, visible):
+            return
         self.translation_header.removeWidget(self.translation_toggle_button)
         self.collapsed_panels_layout.removeWidget(self.translation_toggle_button)
         if visible:
@@ -1228,17 +1438,214 @@ class MainWindow(QMainWindow):
             self._resize_visible_editor_windows()
 
     def _resize_visible_editor_windows(self) -> None:
-        visible_indices = [0]
-        if not self.translation_box.isHidden():
-            visible_indices.append(1)
-        if not self.transcription_box.isHidden():
-            visible_indices.append(2)
+        panels = [self.editors.widget(index) for index in range(self.editors.count())]
+        visible_indices = [
+            index for index, panel in enumerate(panels) if not panel.isHidden()
+        ]
+        if not visible_indices:
+            return
 
         total_width = max(sum(self.editors.sizes()), self.editors.width(), 3)
         width = total_width // len(visible_indices)
         self.editors.setSizes(
-            [width if index in visible_indices else 0 for index in range(3)]
+            [width if index in visible_indices else 0 for index in range(len(panels))]
         )
+
+    def _desired_panel_order(self) -> list[QWidget]:
+        if not self.panels_swapped:
+            return [self.source_box, self.translation_box, self.transcription_box]
+        if self.current_language.key in {"Chine", "Japan"}:
+            return [self.transcription_box, self.source_box, self.translation_box]
+        return [self.translation_box, self.source_box, self.transcription_box]
+
+    def _apply_panel_order(self) -> None:
+        for index, panel in enumerate(self._desired_panel_order()):
+            self.editors.insertWidget(index, panel)
+        self._resize_visible_editor_windows()
+
+    @Slot()
+    def switch_editor_windows(self) -> None:
+        self.panels_swapped = not self.panels_swapped
+        self._apply_panel_order()
+        self.statusBar().showMessage(
+            self._t("windows_switched" if self.panels_swapped else "windows_restored")
+        )
+
+    def _card_rows(self) -> list[TranslationRow]:
+        rows = build_translation_rows(
+            self.source_edit.toPlainText(),
+            self.translation_edit.toPlainText(),
+            self.transcription_edit.toPlainText(),
+        )
+        if self._range_a_line is not None and self._range_b_line is not None:
+            return rows_between(rows, self._range_a_line, self._range_b_line)
+        return rows
+
+    def _initial_card_line(self, line_numbers: list[int]) -> int:
+        candidates = (
+            self._replay_highlight_line,
+            self._hover_line_number,
+            self.source_edit.textCursor().blockNumber(),
+        )
+        return next(
+            (line for line in candidates if line is not None and line in line_numbers),
+            line_numbers[0],
+        )
+
+    @staticmethod
+    def _editor_line(editor: QTextEdit, line_number: int) -> str:
+        block = editor.document().findBlockByNumber(line_number)
+        return block.text().strip() if block.isValid() else ""
+
+    def _card_fields(self, line_number: int) -> list[CardField]:
+        source = CardField(
+            self._t("source_text"),
+            self._editor_line(self.source_edit, line_number),
+            kind="source",
+        )
+        translation = CardField(
+            self.translation_title.text(),
+            self._editor_line(self.translation_edit, line_number),
+            kind="translation",
+        )
+        transcription = CardField(
+            self.transcription_title.text(),
+            self._editor_line(self.transcription_edit, line_number),
+            kind="transcription",
+        )
+        visible = {
+            "source": not self.source_box.isHidden(),
+            "translation": not self.translation_box.isHidden(),
+            "transcription": not self.transcription_box.isHidden(),
+        }
+        if not self.panels_swapped:
+            candidates = (
+                ("source", source),
+                ("translation", translation),
+                ("transcription", transcription),
+            )
+        elif self.current_language.key in {"Chine", "Japan"}:
+            candidates = (
+                ("transcription", transcription),
+                ("source", source),
+                ("translation", translation),
+            )
+        else:
+            candidates = (
+                ("translation", translation),
+                ("source", source),
+                ("transcription", transcription),
+            )
+        ordered = [field for key, field in candidates if visible[key]]
+        return [
+            CardField(
+                field.title,
+                field.text,
+                primary=index == 0,
+                kind=field.kind,
+            )
+            for index, field in enumerate(ordered)
+        ]
+
+    def _play_card_line(self, line_number: int) -> None:
+        rows = [row for row in self._card_rows() if row.index == line_number]
+        if not rows:
+            return
+        self._show_synchronized_line(line_number)
+        if self._timed_audio_ready() and self.timed_manifest:
+            timed_line = next(
+                (line for line in self.timed_manifest.lines if line.line == line_number),
+                None,
+            )
+            if timed_line:
+                self._start_timed_playback(
+                    timed_line.start_ms,
+                    timed_line.end_ms,
+                    "cards",
+                )
+                return
+        self._begin_sequence(rows, "cards")
+
+    def _play_card_range_cycle(self) -> None:
+        if self._timed_playback_active:
+            if self._timed_playback_scope == "cards_range":
+                return
+            if self._timed_playback_scope == "cards":
+                self.stop_audio()
+            else:
+                return
+        if self.sequence.active:
+            if self._sequence_scope == "cards_range":
+                return
+            if self._sequence_scope == "cards":
+                self._stop_sequence()
+            else:
+                return
+        rows = self._card_rows()
+        if not rows:
+            return
+        if self._timed_audio_ready() and self.timed_manifest:
+            interval = self.timed_manifest.interval(rows[0].index, rows[-1].index)
+            if interval:
+                self._start_timed_playback(interval[0], interval[1], "cards_range")
+                return
+        self._begin_sequence(rows, "cards_range")
+
+    def _stop_card_playback(self) -> None:
+        if self._timed_playback_active and self._timed_playback_scope in {
+            "cards",
+            "cards_range",
+        }:
+            self.stop_audio()
+        elif self.sequence.active and self._sequence_scope in {"cards", "cards_range"}:
+            self._stop_sequence()
+
+    @Slot()
+    def open_cards(self) -> None:
+        rows = self._card_rows()
+        if not rows:
+            QMessageBox.information(self, self.windowTitle(), self._t("no_card_lines"))
+            return
+        self.stop_current_operation()
+        line_numbers = [row.index for row in rows]
+        initial_line = self._initial_card_line(line_numbers)
+        has_ab_range = self._range_a_line is not None and self._range_b_line is not None
+        self._show_synchronized_line(initial_line)
+        dialog = FlashcardsDialog(
+            line_numbers,
+            initial_line,
+            self._card_fields,
+            self._play_card_line,
+            lambda: self.tasks.foreground is None,
+            self._play_card_range_cycle if has_ab_range else None,
+            title=self._t("cards_title"),
+            close_text=self._t("close"),
+            mode_text=(
+                self._t(
+                    "cards_ab_badge",
+                    start=min(self._range_a_line, self._range_b_line) + 1,
+                    end=max(self._range_a_line, self._range_b_line) + 1,
+                )
+                if has_ab_range
+                else self._t("cards_all_badge")
+            ),
+            navigation_hint=self._t("cards_navigation_hint"),
+            space_hint=self._t(
+                "cards_space_range_hint" if has_ab_range else "cards_space_line_hint"
+            ),
+            primary_font_size=self.preferences.card_primary_font_size,
+            secondary_font_size=self.preferences.card_secondary_font_size,
+            cycle_navigation=has_ab_range,
+            parent=self,
+        )
+        self._active_cards_dialog = dialog
+        self.ab_repeat_shortcut.setEnabled(False)
+        try:
+            dialog.exec()
+        finally:
+            self._active_cards_dialog = None
+            self._stop_card_playback()
+            self._update_ab_controls()
 
     @Slot()
     def set_range_marker_a(self) -> None:
@@ -1275,12 +1682,15 @@ class MainWindow(QMainWindow):
         self.mark_a_button.setText("A")
         self.mark_b_button.setText("B")
         self.ab_audio_cache.clear()
+        self.card_audio_cache.clear()
         self._render_source_highlights()
         self._update_ab_controls()
 
     @Slot()
     def reset_ab_range(self) -> None:
-        if self.sequence.active and self._sequence_scope == "ab":
+        if self._timed_playback_active and self._timed_playback_scope == "ab":
+            self.stop_audio()
+        elif self.sequence.active and self._sequence_scope == "ab":
             self._stop_sequence(self._t("range_stopped"))
         elif self.ab_audio_cache.contains(self.audio_path):
             self.stop_audio()
@@ -1293,7 +1703,7 @@ class MainWindow(QMainWindow):
             return
         busy = hasattr(self, "progress") and self.progress.isVisible()
         has_source = bool(self.source_edit.toPlainText().strip())
-        idle = not busy and not self.sequence.active
+        idle = not busy and not self.sequence.active and not self._timed_playback_active
         self.mark_a_button.setEnabled(idle and has_source)
         self.mark_b_button.setEnabled(idle and has_source)
         has_range = self._range_a_line is not None and self._range_b_line is not None
@@ -1304,7 +1714,11 @@ class MainWindow(QMainWindow):
         self.reset_ab_button.setEnabled(has_ab_state)
         if hasattr(self, "ab_repeat_shortcut"):
             self.ab_repeat_shortcut.setEnabled(
-                idle and has_source and has_range and self._ab_repeat_ready
+                idle
+                and has_source
+                and has_range
+                and self._ab_repeat_ready
+                and self._active_cards_dialog is None
             )
 
     def eventFilter(self, watched: QObject, event: QEvent) -> bool:
@@ -1357,6 +1771,8 @@ class MainWindow(QMainWindow):
     def _show_synchronized_line(self, line_number: int) -> None:
         self._replay_highlight_line = line_number
         self._render_source_highlights()
+        if self._active_cards_dialog:
+            self._active_cards_dialog.show_line(line_number)
         for editor in (
             self.source_edit,
             self.translation_edit,
@@ -1416,6 +1832,12 @@ class MainWindow(QMainWindow):
             old_path = self.audio_path
             self.audio_path = None
             self.repository.delete_temporary_audio(old_path)
+        self.audio_manifest_path = None
+        self.audio_srt_path = None
+        self.timed_manifest = None
+        self._timed_playback_active = False
+        self._timed_playback_scope = None
+        self._timed_stop_ms = None
         self._audio_is_complete_document = False
         self.ab_audio_cache.clear()
         self.replay_button.setEnabled(bool(self.source_edit.toPlainText().strip()))
@@ -1427,7 +1849,10 @@ class MainWindow(QMainWindow):
 
     @Slot()
     def replay_audio(self) -> None:
-        self._start_sequence()
+        if self._timed_audio_ready():
+            self._start_timed_playback(0, None, "all")
+        else:
+            self._start_sequence()
 
     def _start_sequence(self) -> None:
         rows = build_translation_rows(
@@ -1464,6 +1889,15 @@ class MainWindow(QMainWindow):
                 self, self.windowTitle(), self._t("set_markers_first")
             )
             return
+        if self._timed_audio_ready() and self.timed_manifest:
+            interval = self.timed_manifest.interval(
+                self._range_a_line,
+                self._range_b_line,
+            )
+            if interval:
+                self._ab_repeat_ready = False
+                self._start_timed_playback(interval[0], interval[1], "ab")
+                return
         rows = rows_between(
             build_translation_rows(
                 self.source_edit.toPlainText(),
@@ -1518,6 +1952,9 @@ class MainWindow(QMainWindow):
             )
         )
 
+    def _line_audio_cache_contains(self, path: Path | None) -> bool:
+        return self.ab_audio_cache.contains(path) or self.card_audio_cache.contains(path)
+
     def _play_next_sequence_line(self, generation: int) -> None:
         if not self.sequence.matches(generation):
             return
@@ -1546,7 +1983,11 @@ class MainWindow(QMainWindow):
             self._stop_sequence(self._t("voice_not_selected"))
             return
         tts_settings = self.tts_settings
-        use_ab_cache = self._sequence_scope == "ab"
+        line_cache = None
+        if self._sequence_scope == "ab":
+            line_cache = self.ab_audio_cache
+        elif self._sequence_scope in {"cards", "cards_range"}:
+            line_cache = self.card_audio_cache
 
         def prepare_line(cancelled: Callable[[], bool]) -> tuple[str, str, bool, bool]:
             target_text = translated_text or self.translator.translate(source_text, cancelled)
@@ -1556,7 +1997,7 @@ class MainWindow(QMainWindow):
             )
             speech_text = self.language_controller.prepare_speech(target_text)
             cache_key: str | None = None
-            if use_ab_cache:
+            if line_cache:
                 cache_key = self._ab_audio_cache_key(
                     line_number,
                     source_text,
@@ -1564,10 +2005,10 @@ class MainWindow(QMainWindow):
                     voice,
                     tts_settings,
                 )
-                cached = self.ab_audio_cache.get(cache_key)
+                cached = line_cache.get(cache_key)
                 if cached:
                     return str(cached), target_text, target_text != translated_text, True
-                output = self.ab_audio_cache.path_for(cache_key)
+                output = line_cache.path_for(cache_key)
             else:
                 fd, filename = tempfile.mkstemp(
                     prefix="gpt01_sequence_tts_",
@@ -1584,8 +2025,8 @@ class MainWindow(QMainWindow):
                     settings=tts_settings,
                 )
             except Exception:
-                if cache_key:
-                    self.ab_audio_cache.discard(cache_key)
+                if cache_key and line_cache:
+                    line_cache.discard(cache_key)
                 else:
                     output.unlink(missing_ok=True)
                 raise
@@ -1595,7 +2036,7 @@ class MainWindow(QMainWindow):
             filename, target_text, translation_changed, cache_hit = result
             if not self.sequence.matches(generation):
                 output = Path(filename)
-                if not self.ab_audio_cache.contains(output):
+                if not self._line_audio_cache_contains(output):
                     output.unlink(missing_ok=True)
                 return
             if translation_changed:
@@ -1644,7 +2085,12 @@ class MainWindow(QMainWindow):
         editor.blockSignals(False)
 
     def _media_status_changed(self, status: QMediaPlayer.MediaStatus) -> None:
-        if status != QMediaPlayer.MediaStatus.EndOfMedia or not self.sequence.active:
+        if status != QMediaPlayer.MediaStatus.EndOfMedia:
+            return
+        if self._timed_playback_active:
+            self._finish_timed_playback()
+            return
+        if not self.sequence.active:
             return
         generation = self.sequence.generation
         if self.sequence.advance() is None:
@@ -1754,10 +2200,7 @@ class MainWindow(QMainWindow):
         translation = self.translation_edit.toPlainText()
         complete_audio = bool(
             audio_scope == "full"
-            and
-            self._audio_is_complete_document
-            and self.audio_path
-            and self.audio_path.exists()
+            and self._timed_audio_ready()
         )
         if not complete_audio and not translation.strip():
             QMessageBox.information(
@@ -1782,18 +2225,26 @@ class MainWindow(QMainWindow):
             return
         target = self._language_export_path(filename, ".mp3")
         if complete_audio and self.audio_path:
-            self._save_complete_audio(self.audio_path, target)
+            self._save_audio_package(
+                TimedAudioPackage(
+                    self.audio_path,
+                    self.audio_manifest_path,  # type: ignore[arg-type]
+                    self.audio_srt_path,  # type: ignore[arg-type]
+                    self.timed_manifest,  # type: ignore[arg-type]
+                ),
+                target,
+            )
             return
 
         source_text = self.source_edit.toPlainText()
-        selected_rows: list[TranslationRow] = []
+        selected_rows = build_translation_rows(
+            source_text,
+            translation,
+            self.transcription_edit.toPlainText(),
+        )
         if audio_scope == "range":
             selected_rows = rows_between(
-                build_translation_rows(
-                    source_text,
-                    translation,
-                    self.transcription_edit.toPlainText(),
-                ),
+                selected_rows,
                 self._range_a_line or 0,
                 self._range_b_line or 0,
             )
@@ -1805,64 +2256,79 @@ class MainWindow(QMainWindow):
                 )
                 return
         tts_settings = self.tts_settings
-        fd, temporary_name = tempfile.mkstemp(prefix="gpt01_full_tts_", suffix=".mp3")
-        os.close(fd)
-        output = Path(temporary_name)
+        language_key = self.current_language.key
 
-        def synthesize_full_document(cancelled: Callable[[], bool]) -> str:
-            try:
-                if selected_rows:
-                    targets = []
-                    for row in selected_rows:
-                        target_text = row.translation or self.translator.translate(
-                            row.source,
-                            cancelled,
-                        )
-                        targets.append(
-                            self.language_controller.prepare_translation(
-                                row.source,
-                                target_text,
-                            )
-                        )
-                    prepared_translation = "\n".join(targets)
-                else:
-                    prepared_translation = self.language_controller.prepare_translation(
-                        source_text,
-                        translation,
-                    )
-                speech_text = self.language_controller.prepare_speech(
-                    prepared_translation
+        def build_package(
+            cancelled: Callable[[], bool],
+            report: Callable[[int, int, str], None],
+        ) -> TimedAudioPackage:
+            prepared_rows: list[TranslationRow] = []
+            for row in selected_rows:
+                target_text = row.translation or self.translator.translate(
+                    row.source,
+                    cancelled,
                 )
-                self.speech.synthesize(
+                target_text = self.language_controller.prepare_translation(
+                    row.source,
+                    target_text,
+                )
+                prepared_rows.append(
+                    TranslationRow(
+                        row.index,
+                        row.source,
+                        target_text,
+                        row.transcription
+                        or self.language_controller.transcribe(target_text),
+                    )
+                )
+            audio_path, manifest_path, srt_path = self._temporary_audio_package_paths()
+            return build_timed_audio_package(
+                prepared_rows,
+                audio_path,
+                manifest_path,
+                srt_path,
+                language_key,
+                voice,
+                tts_settings,
+                lambda speech_text, output: self.speech.synthesize_timed(
                     speech_text,
                     voice,
                     output,
                     cancelled,
                     settings=tts_settings,
-                )
-            except Exception:
-                output.unlink(missing_ok=True)
-                raise
-            return str(output)
+                ),
+                speech_text=self.language_controller.prepare_speech,
+                progress=lambda current, total: report(
+                    current,
+                    total,
+                    self._t(
+                        "audio_package_progress",
+                        current=current,
+                        total=total,
+                    ),
+                ),
+            )
 
-        def save_full_document(path: str) -> None:
-            generated_audio = Path(path)
+        def save_generated_package(package: TimedAudioPackage) -> None:
             if audio_scope == "range":
-                self._save_complete_audio(generated_audio, target)
-                self.repository.delete_temporary_audio(generated_audio)
+                self._save_audio_package(package, target)
+                self.repository.delete_temporary_audio(package.audio_path)
                 self._update_save_audio_button()
                 return
             previous_audio = self.audio_path
-            self.audio_path = generated_audio
+            self.audio_path = package.audio_path
+            self.audio_manifest_path = package.manifest_path
+            self.audio_srt_path = package.srt_path
+            self.timed_manifest = package.manifest
             self._audio_is_complete_document = True
             if previous_audio and previous_audio != self.audio_path:
                 self.repository.delete_temporary_audio(previous_audio)
-            self._save_complete_audio(self.audio_path, target)
+            self._save_audio_package(package, target)
             self._update_save_audio_button()
 
-        self._run_task(
-            synthesize_full_document,
-            save_full_document,
+        self._run_progress_task(
+            build_package,
+            save_generated_package,
             self._t("synthesizing"),
         )
 
@@ -1891,24 +2357,110 @@ class MainWindow(QMainWindow):
             return None
         return str(scope_combo.currentData())
 
-    def _save_complete_audio(self, source: Path, target: Path) -> None:
+    def _save_audio_package(self, package: TimedAudioPackage, target: Path) -> None:
         try:
-            target.write_bytes(source.read_bytes())
+            json_target = target.with_suffix(".json")
+            srt_target = target.with_suffix(".srt")
+            shutil.copyfile(package.audio_path, target)
+            shutil.copyfile(package.manifest_path, json_target)
+            shutil.copyfile(package.srt_path, srt_target)
             self._remember_directory("last_export_directory", target.parent)
-            self.statusBar().showMessage(self._t("audio_saved", path=target))
+            self.statusBar().showMessage(
+                self._t(
+                    "audio_package_saved",
+                    mp3=target,
+                    json=json_target.name,
+                    srt=srt_target.name,
+                )
+            )
         except OSError as exc:
             self._show_error(self._t("save_audio_failed", error=exc))
 
     @Slot()
     def stop_audio(self) -> None:
+        was_timed = self._timed_playback_active
+        self._timed_playback_active = False
+        self._timed_playback_scope = None
+        self._timed_stop_ms = None
         self.player.stop()
         self.player.setSource(QUrl())
+        if was_timed:
+            self._replay_highlight_line = None
+            self._render_source_highlights()
+            self._update_ab_controls()
+
+    def _timed_audio_ready(self) -> bool:
+        return bool(
+            self.audio_path
+            and self.audio_path.exists()
+            and self.timed_manifest
+            and self.audio_manifest_path
+            and self.audio_manifest_path.exists()
+            and self.audio_srt_path
+            and self.audio_srt_path.exists()
+        )
+
+    def _start_timed_playback(
+        self,
+        start_ms: int,
+        stop_ms: int | None,
+        scope: str,
+    ) -> None:
+        if not self._timed_audio_ready() or not self.audio_path:
+            return
+        if self.sequence.active:
+            self._stop_sequence()
+        self.player.stop()
+        self.player.setSource(QUrl.fromLocalFile(str(self.audio_path)))
+        self._timed_playback_active = True
+        self._timed_playback_scope = scope
+        self._timed_stop_ms = stop_ms
+        self._ab_repeat_ready = False
+        self.player.setPosition(max(0, start_ms))
+        self._timed_position_changed(max(0, start_ms))
+        self.player.play()
+        self.stop_button.setEnabled(True)
+        self._update_ab_controls()
+
+    @Slot(int)
+    def _timed_position_changed(self, position_ms: int) -> None:
+        if not self._timed_playback_active or not self.timed_manifest:
+            return
+        if self._timed_stop_ms is not None and position_ms >= self._timed_stop_ms:
+            self._finish_timed_playback()
+            return
+        timed_line = self.timed_manifest.line_at(position_ms)
+        if timed_line and timed_line.line != self._replay_highlight_line:
+            self._show_synchronized_line(timed_line.line)
+
+    def _finish_timed_playback(self) -> None:
+        completed_scope = self._timed_playback_scope
+        self.player.pause()
+        self._timed_playback_active = False
+        self._timed_playback_scope = None
+        self._timed_stop_ms = None
+        self._replay_highlight_line = None
+        self._render_source_highlights()
+        self._ab_repeat_ready = completed_scope == "ab"
+        self.stop_button.setEnabled(False)
+        self._update_ab_controls()
+        if self._ab_repeat_ready:
+            self.statusBar().showMessage(self._t("range_complete"))
+        else:
+            self.statusBar().showMessage(self._t("sequence_complete"))
 
     def _playback_changed(self, state: QMediaPlayer.PlaybackState) -> None:
         playing = state == QMediaPlayer.PlaybackState.PlayingState
         busy = self.progress.isVisible()
-        self.stop_button.setEnabled(playing or busy or self.sequence.active)
-        if not playing and not busy and not self.sequence.active:
+        self.stop_button.setEnabled(
+            playing or busy or self.sequence.active or self._timed_playback_active
+        )
+        if (
+            not playing
+            and not busy
+            and not self.sequence.active
+            and not self._timed_playback_active
+        ):
             if self._ab_repeat_ready:
                 self.statusBar().showMessage(self._t("range_complete"))
             else:
@@ -2103,8 +2655,15 @@ class MainWindow(QMainWindow):
                 self.voice_combo.setCurrentIndex(voice_index)
         self.audio_output.setVolume(state.volume)
         self.tts_settings = state.tts_settings
-        self._set_transcription_window_visible(state.transcription_visible)
+        self.audio_preparation_mode = state.audio_preparation_mode
+        self._set_source_window_visible(True)
+        self._set_translation_window_visible(True)
+        self._set_transcription_window_visible(True)
+        self._set_source_window_visible(state.source_visible)
         self._set_translation_window_visible(state.translation_window_visible)
+        self._set_transcription_window_visible(state.transcription_visible)
+        self.panels_swapped = state.panels_swapped
+        self._apply_panel_order()
         if len(state.splitter_sizes) == 3:
             self.editors.setSizes(state.splitter_sizes)
         if state.window_geometry:
@@ -2118,9 +2677,16 @@ class MainWindow(QMainWindow):
         )
         self.subtitle_cues = self._restore_subtitle_cues(self.current_source_path)
         self.audio_path = restored.audio_path
-        self._audio_is_complete_document = bool(
-            self.audio_path and self.audio_path.exists()
+        self.audio_manifest_path = (
+            self.audio_path.with_suffix(".json") if self.audio_path else None
         )
+        self.audio_srt_path = self.audio_path.with_suffix(".srt") if self.audio_path else None
+        self.timed_manifest = (
+            load_manifest(self.audio_manifest_path)
+            if self.audio_manifest_path and self.audio_manifest_path.exists()
+            else None
+        )
+        self._audio_is_complete_document = self._timed_audio_ready()
         if self.audio_path:
             self.player.setSource(QUrl.fromLocalFile(str(self.audio_path)))
         self._update_save_audio_button()
@@ -2146,8 +2712,10 @@ class MainWindow(QMainWindow):
             translation=self.translation_edit.toPlainText(),
             transcription=self.transcription_edit.toPlainText(),
             selected_voice=self.selected_voice() or "",
+            source_visible=not self.source_box.isHidden(),
             transcription_visible=not self.transcription_box.isHidden(),
             translation_window_visible=not self.translation_box.isHidden(),
+            panels_swapped=self.panels_swapped,
             splitter_sizes=self.editors.sizes(),
             window_geometry=geometry,
             volume=self.audio_output.volume(),
@@ -2155,6 +2723,7 @@ class MainWindow(QMainWindow):
             tts_rate=self.tts_settings.rate,
             tts_pitch=self.tts_settings.pitch,
             tts_volume=self.tts_settings.volume,
+            audio_preparation_mode=self.audio_preparation_mode,
         )
         try:
             self.repository.save_session(self.current_language, state, self.audio_path)
@@ -2173,6 +2742,7 @@ class MainWindow(QMainWindow):
         if self.audio_path:
             self.repository.delete_temporary_audio(self.audio_path)
         self.ab_audio_cache.clear()
+        self.card_audio_cache.clear()
         event.accept()
 
 

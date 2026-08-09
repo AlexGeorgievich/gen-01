@@ -9,6 +9,7 @@ from PySide6.QtWidgets import (
     QComboBox,
     QDialog,
     QGraphicsDropShadowEffect,
+    QSpinBox,
     QTextBrowser,
 )
 
@@ -165,6 +166,93 @@ def test_column_export_layout_is_enabled_by_default(tmp_path, monkeypatch) -> No
     assert window._select_export_kind() is None
 
     assert captured["checked"] is True
+    window._dirty = False
+    window.close()
+
+
+def test_settings_exposes_fast_and_complete_audio_modes(tmp_path, monkeypatch) -> None:
+    _app()
+    window = MainWindow(SessionRepository(tmp_path))
+    captured: dict[str, object] = {}
+
+    def inspect_dialog(dialog: QDialog) -> QDialog.DialogCode:
+        combo = dialog.findChild(QComboBox, "audioPreparationModeCombo")
+        captured["values"] = [combo.itemData(index) for index in range(combo.count())]
+        captured["selected"] = combo.currentData()
+        return QDialog.DialogCode.Rejected
+
+    monkeypatch.setattr(QDialog, "exec", inspect_dialog)
+    window.open_settings()
+
+    assert captured["values"] == ["line", "package"]
+    assert captured["selected"] == "line"
+    window._dirty = False
+    window.close()
+
+
+def test_settings_exposes_card_font_sizes(tmp_path, monkeypatch) -> None:
+    _app()
+    window = MainWindow(SessionRepository(tmp_path))
+    captured = {}
+
+    def inspect_dialog(dialog: QDialog) -> QDialog.DialogCode:
+        captured["primary"] = dialog.findChild(
+            QSpinBox, "cardPrimaryFontSizeSpin"
+        ).value()
+        captured["secondary"] = dialog.findChild(
+            QSpinBox, "cardSecondaryFontSizeSpin"
+        ).value()
+        return QDialog.DialogCode.Rejected
+
+    monkeypatch.setattr(QDialog, "exec", inspect_dialog)
+    window.open_settings()
+
+    assert captured == {"primary": 24, "secondary": 18}
+    window._dirty = False
+    window.close()
+
+
+def test_settings_saves_card_font_sizes(tmp_path, monkeypatch) -> None:
+    _app()
+    repository = SessionRepository(tmp_path)
+    window = MainWindow(repository)
+
+    def choose_sizes(dialog: QDialog) -> QDialog.DialogCode:
+        dialog.findChild(QSpinBox, "cardPrimaryFontSizeSpin").setValue(32)
+        dialog.findChild(QSpinBox, "cardSecondaryFontSizeSpin").setValue(21)
+        return QDialog.DialogCode.Accepted
+
+    monkeypatch.setattr(QDialog, "exec", choose_sizes)
+    window.open_settings()
+
+    assert window.preferences.card_primary_font_size == 32
+    assert window.preferences.card_secondary_font_size == 21
+    restored = repository.load_preferences()
+    assert restored.card_primary_font_size == 32
+    assert restored.card_secondary_font_size == 21
+    window._dirty = False
+    window.close()
+
+
+def test_settings_saves_complete_audio_mode_in_current_language_state(
+    tmp_path, monkeypatch
+) -> None:
+    _app()
+    repository = SessionRepository(tmp_path)
+    window = MainWindow(repository)
+
+    def select_complete_package(dialog: QDialog) -> QDialog.DialogCode:
+        combo = dialog.findChild(QComboBox, "audioPreparationModeCombo")
+        combo.setCurrentIndex(combo.findData("package"))
+        return QDialog.DialogCode.Accepted
+
+    monkeypatch.setattr(QDialog, "exec", select_complete_package)
+    window.open_settings()
+
+    assert window.audio_preparation_mode == "package"
+    assert repository.load_session(window.current_language).state.audio_preparation_mode == (
+        "package"
+    )
     window._dirty = False
     window.close()
 

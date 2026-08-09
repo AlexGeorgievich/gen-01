@@ -1,9 +1,9 @@
 import os
-from pathlib import Path
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 import pytest  # noqa: E402
+from PySide6.QtCore import Qt  # noqa: E402
 from PySide6.QtMultimedia import QMediaPlayer  # noqa: E402
 from PySide6.QtTest import QTest  # noqa: E402
 from PySide6.QtWidgets import QApplication  # noqa: E402
@@ -11,6 +11,12 @@ from PySide6.QtWidgets import QApplication  # noqa: E402
 from app import MainWindow  # noqa: E402
 from gpt01.models import TranslationRow  # noqa: E402
 from gpt01.session import SessionRepository  # noqa: E402
+from gpt01.timed_audio import (  # noqa: E402
+    TimedAudioManifest,
+    TimedLine,
+    save_manifest,
+    save_srt,
+)
 
 
 @pytest.fixture(scope="module")
@@ -23,6 +29,32 @@ def set_caret_line(window, line_number):
     cursor = window.source_edit.textCursor()
     cursor.setPosition(block.position())
     window.source_edit.setTextCursor(cursor)
+
+
+def install_timed_package(window, tmp_path, lines=None):
+    audio = tmp_path / "prepared.mp3"
+    manifest_path = tmp_path / "prepared.json"
+    srt_path = tmp_path / "prepared.srt"
+    audio.write_bytes(b"complete-audio")
+    manifest = TimedAudioManifest.create(
+        window.current_language.key,
+        window.selected_voice(),
+        window.tts_settings,
+        lines
+        or [
+            TimedLine(0, 0, 1000, "one", "un", "un"),
+            TimedLine(1, 1000, 2200, "two", "deux", "deux"),
+        ],
+    )
+    save_manifest(manifest_path, manifest)
+    save_srt(srt_path, manifest)
+    window.audio_path = audio
+    window.audio_manifest_path = manifest_path
+    window.audio_srt_path = srt_path
+    window.timed_manifest = manifest
+    window._audio_is_complete_document = True
+    window._update_save_audio_button()
+    return audio, manifest_path, srt_path, manifest
 
 
 def test_markers_select_reversed_inclusive_range_and_enable_space_repeat(
@@ -115,7 +147,7 @@ def test_marker_button_uses_blinking_text_cursor_without_mouse_move(qapp, tmp_pa
     window.close()
 
 
-def test_source_change_resets_markers_and_space_repeat(qapp, tmp_path):
+def test_source_change_resets_markers_and_repeat_state(qapp, tmp_path):
     window = MainWindow(SessionRepository(tmp_path))
     window.source_edit.setPlainText("one\ntwo")
     set_caret_line(window, 0)
@@ -133,13 +165,14 @@ def test_source_change_resets_markers_and_space_repeat(qapp, tmp_path):
     assert window.mark_a_button.text() == "A"
     assert window.mark_b_button.text() == "B"
     assert not window.play_ab_button.isEnabled()
+    assert not window._ab_repeat_ready
     assert not window.ab_repeat_shortcut.isEnabled()
 
     window._dirty = False
     window.close()
 
 
-def test_stop_does_not_arm_space_repeat(qapp, tmp_path):
+def test_stop_does_not_arm_ab_repeat(qapp, tmp_path):
     window = MainWindow(SessionRepository(tmp_path))
     window.source_edit.setPlainText("one\ntwo")
     window._range_a_line = 0
@@ -152,6 +185,21 @@ def test_stop_does_not_arm_space_repeat(qapp, tmp_path):
     assert not window.sequence.active
     assert not window._ab_repeat_ready
     assert not window.ab_repeat_shortcut.isEnabled()
+
+    window._dirty = False
+    window.close()
+
+
+def test_range_buttons_do_not_consume_space_as_a_button_click(qapp, tmp_path):
+    window = MainWindow(SessionRepository(tmp_path))
+
+    for button in (
+        window.mark_a_button,
+        window.mark_b_button,
+        window.play_ab_button,
+        window.reset_ab_button,
+    ):
+        assert button.focusPolicy() == Qt.FocusPolicy.NoFocus
 
     window._dirty = False
     window.close()
@@ -228,28 +276,17 @@ def test_ab_repeat_reuses_cached_line_audio_and_reset_removes_it(qapp, tmp_path)
     window.close()
 
 
-def test_speak_plays_source_rows_with_synchronized_highlight_and_combines_audio(
-    qapp,
-    tmp_path,
-):
+def test_speak_uses_prepared_timestamps_for_synchronized_highlight(qapp, tmp_path):
     window = MainWindow(SessionRepository(tmp_path))
     window.source_edit.setPlainText("one\ntwo")
     window.translation_edit.setPlainText("un\ndeux")
-    synthesized = []
-
-    def synthesize(text, _voice, output, _cancelled, *, settings=None):
-        synthesized.append((text, settings))
-        output.write_bytes(text.encode("utf-8"))
-
-    window.speech.synthesize = synthesize
-    window._run_task = lambda function, on_result, *_args: on_result(
-        function(lambda: False)
-    )
-    window._play_file = lambda filename: setattr(window, "audio_path", Path(filename))
+    install_timed_package(window, tmp_path)
 
     window.speak_text()
 
-    assert window._sequence_scope == "speak"
+    assert window._timed_playback_active
+    assert window._timed_playback_scope == "all"
+    window._timed_position_changed(0)
     for editor in (
         window.source_edit,
         window.translation_edit,
@@ -257,7 +294,7 @@ def test_speak_plays_source_rows_with_synchronized_highlight_and_combines_audio(
     ):
         assert editor.extraSelections()[0].cursor.blockNumber() == 0
 
-    window._media_status_changed(QMediaPlayer.MediaStatus.EndOfMedia)
+    window._timed_position_changed(1500)
 
     for editor in (
         window.source_edit,
@@ -268,9 +305,7 @@ def test_speak_plays_source_rows_with_synchronized_highlight_and_combines_audio(
 
     window._media_status_changed(QMediaPlayer.MediaStatus.EndOfMedia)
 
-    assert synthesized == [("un", window.tts_settings), ("deux", window.tts_settings)]
-    assert not window.sequence.active
-    assert window.audio_path.read_bytes() == b"undeux"
+    assert not window._timed_playback_active
     assert window.save_audio_button.isEnabled()
 
     window._reset_audio_state()
@@ -278,7 +313,30 @@ def test_speak_plays_source_rows_with_synchronized_highlight_and_combines_audio(
     window.close()
 
 
-def test_save_mp3_after_stopping_speak_synthesizes_the_full_translation(
+def test_space_repeats_completed_timed_ab_range(qapp, tmp_path):
+    window = MainWindow(SessionRepository(tmp_path))
+    window.source_edit.setPlainText("one\ntwo")
+    window.translation_edit.setPlainText("un\ndeux")
+    install_timed_package(window, tmp_path)
+    window._range_a_line = 0
+    window._range_b_line = 1
+
+    window.play_ab_range()
+    assert window._timed_playback_scope == "ab"
+    window._finish_timed_playback()
+
+    assert window.ab_repeat_shortcut.isEnabled()
+    window.ab_repeat_shortcut.activated.emit()
+
+    assert window._timed_playback_active
+    assert window._timed_playback_scope == "ab"
+    window.stop_audio()
+    window._reset_audio_state()
+    window._dirty = False
+    window.close()
+
+
+def test_save_mp3_copies_prepared_mp3_json_and_srt(
     qapp,
     tmp_path,
     monkeypatch,
@@ -286,24 +344,7 @@ def test_save_mp3_after_stopping_speak_synthesizes_the_full_translation(
     window = MainWindow(SessionRepository(tmp_path))
     window.source_edit.setPlainText("one\ntwo")
     window.translation_edit.setPlainText("un\ndeux")
-    synthesized = []
-
-    def synthesize(text, _voice, output, _cancelled, *, settings=None):
-        synthesized.append((text, settings))
-        output.write_bytes(text.encode("utf-8"))
-
-    window.speech.synthesize = synthesize
-    window._run_task = lambda function, on_result, *_args: on_result(
-        function(lambda: False)
-    )
-    window._play_file = lambda filename: setattr(window, "audio_path", Path(filename))
-
-    window.speak_text()
-    window.stop_current_operation()
-
-    assert not window.sequence.active
-    assert not window._audio_is_complete_document
-    assert window.save_audio_button.isEnabled()
+    install_timed_package(window, tmp_path)
 
     selected = tmp_path / "lesson.mp3"
     target = window._language_export_path(str(selected), ".mp3")
@@ -313,8 +354,12 @@ def test_save_mp3_after_stopping_speak_synthesizes_the_full_translation(
     )
     window.save_audio()
 
-    assert synthesized[-1] == ("un\ndeux", window.tts_settings)
-    assert target.read_bytes() == b"un\ndeux"
+    assert target.read_bytes() == b"complete-audio"
+    assert target.with_suffix(".json").is_file()
+    assert "\"start_ms\": 0" in target.with_suffix(".json").read_text(encoding="utf-8")
+    assert "00:00:00,000 --> 00:00:01,000" in target.with_suffix(".srt").read_text(
+        encoding="utf-8"
+    )
     assert window._audio_is_complete_document
 
     window._reset_audio_state()
@@ -324,7 +369,7 @@ def test_save_mp3_after_stopping_speak_synthesizes_the_full_translation(
 
 @pytest.mark.parametrize(
     ("scope", "expected_audio"),
-    (("range", b"deux\ntrois"), ("full", b"un\ndeux\ntrois\nquatre")),
+    (("range", b"deuxtrois"), ("full", b"complete-audio")),
 )
 def test_save_mp3_with_ab_markers_supports_interval_or_full_text(
     qapp,
@@ -336,16 +381,27 @@ def test_save_mp3_with_ab_markers_supports_interval_or_full_text(
     window = MainWindow(SessionRepository(tmp_path))
     window.source_edit.setPlainText("one\ntwo\nthree\nfour")
     window.translation_edit.setPlainText("un\ndeux\ntrois\nquatre")
+    install_timed_package(
+        window,
+        tmp_path,
+        [
+            TimedLine(0, 0, 500, "one", "un", "un"),
+            TimedLine(1, 500, 1000, "two", "deux", "deux"),
+            TimedLine(2, 1000, 1500, "three", "trois", "trois"),
+            TimedLine(3, 1500, 2000, "four", "quatre", "quatre"),
+        ],
+    )
     window._range_a_line = 2
     window._range_b_line = 1
     window._select_audio_export_scope = lambda: scope
 
-    def synthesize(text, _voice, output, _cancelled, *, settings=None):
+    def synthesize_timed(text, _voice, output, _cancelled, *, settings=None):
         output.write_bytes(text.encode("utf-8"))
+        return 500
 
-    window.speech.synthesize = synthesize
-    window._run_task = lambda function, on_result, *_args: on_result(
-        function(lambda: False)
+    window.speech.synthesize_timed = synthesize_timed
+    window._run_progress_task = lambda function, on_result, *_args: on_result(
+        function(lambda: False, lambda *_report: None)
     )
     selected = tmp_path / f"lesson-{scope}.mp3"
     target = window._language_export_path(str(selected), ".mp3")
@@ -357,9 +413,9 @@ def test_save_mp3_with_ab_markers_supports_interval_or_full_text(
     window.save_audio()
 
     assert target.read_bytes() == expected_audio
-    assert window._audio_is_complete_document is (scope == "full")
-    if scope == "range":
-        assert window.audio_path is None
+    assert target.with_suffix(".json").is_file()
+    assert target.with_suffix(".srt").is_file()
+    assert window._audio_is_complete_document
 
     window._reset_audio_state()
     window._dirty = False

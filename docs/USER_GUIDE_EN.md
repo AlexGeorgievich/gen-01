@@ -30,8 +30,39 @@ translation, Microsoft Edge TTS and refreshing the voice list.
 - **Transcription** — IPA, Romaji or Pinyin aligned with the translation.
 
 Use **Clear** in a column header to clear that column. Use the `−` button in the
-Translation or Transcription header to hide the column. Its restore button
-remains available above the workspace.
+Source, Translation or Transcription header to hide the column. Its restore
+button remains available above the workspace. VoiceGun always keeps at least
+one text window visible, so the last open window cannot be collapsed.
+
+**Switch windows** reverses the learning direction. For European languages and
+Russian it places Translation before Source. For Chinese and Japanese it places
+the readable Pinyin or Romaji first, followed by Source and the character form.
+Press it again to restore the original order. The arrangement is remembered for
+each target language.
+
+## Learning cards
+
+Select **Cards** to open the current synchronized line in a large modal learning
+view. In the normal order Source appears first; after switching windows the
+translated learning side appears first. Only columns that are currently open in
+the main workspace are included; when one panel is active, the card contains
+only that panel's synchronized line. Colors match the Source, Translation and
+Transcription panels in the main window. The header shows the active range, and
+the progress bar shows the current position.
+
+- `Right Arrow` or `>` — show and speak the next non-empty line;
+- `Left Arrow` or `<` — show and speak the previous line;
+- `Space` — repeat the current card, or play one complete A–B cycle when both
+  range markers are active;
+- `Esc` or **Close** — stop card playback and return to the workspace.
+
+If A and B are set, Cards is restricted to that inclusive range and navigation
+cycles from the last card to the first and back. `Space` plays all A–B cards
+once; after that cycle finishes, pressing `Space` starts one new cycle. Without
+A–B it repeats only the current line. During an A–B cycle, the modal card text
+and progress change in sync with every spoken line. In complete package mode
+playback seeks by timestamps; in fast mode each card is synthesized once and
+kept in a separate temporary cache.
 
 ## Translation
 
@@ -41,27 +72,32 @@ remains available above the workspace.
 4. Wait for the progress indicator to finish.
 
 VoiceGun preserves paragraphs and line alignment. Translation is provided by
-`deep-translator`; temporary network failures are retried automatically.
+`deep-translator`; temporary network failures are retried automatically. What
+happens next depends on **Audio preparation mode** in Settings. The default
+**Fast line-by-line** mode finishes immediately after translation and prepares
+audio as lines are played. **Complete audio package** additionally prepares one
+complete MP3, an internal JSON timing manifest and an SRT subtitle file. If TTS
+is temporarily unavailable, the completed translation remains available and
+the audio error is reported separately.
 
 ## Speech and synchronized playback
 
 Select a Microsoft TTS voice and use:
 
-- **Speak** — speak the material line by line with synchronized highlighting and
-  scrolling in all three columns; after completion, the generated lines are
-  combined for **Save MP3**;
-- **Replay** — speak source lines sequentially, translating missing lines when
-  required;
+- **Speak** — synthesize and play lines immediately in fast mode, or play the
+  complete prepared MP3 in package mode; both variants highlight and scroll the
+  corresponding line in all three columns;
+- **Replay** — repeat the prepared package or the cached line sequence;
 - **Stop** — stop the current playback or foreground operation;
 - `Ctrl+Space` — speak the line at the mouse pointer or source caret.
 
 The corresponding line is highlighted and scrolled into view in all visible
 columns.
 
-Outside an A–B selection, **Save MP3** always saves the complete translated
-text. If line-by-line playback was stopped before the end, VoiceGun synthesizes
-the complete document before writing the MP3 instead of saving only the
-interrupted line.
+Outside an A–B selection, **Save MP3** saves the complete translated text as a
+three-file package with the same base name: `.mp3` audio, `.srt` subtitles and
+an internal `.json` line-timing manifest. Stopping playback does not truncate
+the saved audio because playback uses the already prepared complete MP3.
 
 When both A and B markers are set, **Save MP3** first offers a choice between
 the marked A–B interval and the complete text. The interval is selected by
@@ -72,12 +108,13 @@ default and its actual source line numbers are shown in the dialog.
 1. Place the text caret on the first source line and select **A**.
 2. Place the caret on the last line and select **B**.
 3. Select **A–B** to speak the inclusive range.
-4. After completion, press `Space` to replay the range.
+4. After completion, press `Space` to replay the same A–B range.
 5. Select **Reset** to stop A–B playback, clear both markers and delete its
    temporary audio cache.
 
-Repeated A–B playback uses a line audio cache and normally does not contact TTS
-again unless the text, language, voice or TTS settings change.
+When a prepared audio package exists, A–B playback seeks directly to the marked
+timestamps in the complete MP3 and does not contact TTS again. The line cache is
+used only as a fallback for material without a prepared package.
 
 ## Saving text
 
@@ -110,11 +147,14 @@ Settings include:
 - interface language: English or Russian;
 - source text language or automatic detection;
 - editor font size;
+- primary and additional text sizes for learning cards;
 - optional French article processing;
+- audio preparation: fast line-by-line (default) or complete package;
 - TTS rate, pitch and volume.
 
 The interface language changes immediately after the Settings dialog is
-confirmed.
+confirmed. Audio preparation mode is remembered independently for each target
+language module.
 
 ## Portable files
 
@@ -123,7 +163,8 @@ VoiceGun stores its working files beside `VoiceGun.exe`:
 - `settings.json` — application preferences;
 - `voicegun.log` — diagnostic log;
 - `language_selection.json` — selected target module;
-- `language_data\<Language>` — texts, MP3, state and voice cache.
+- `language_data\<Language>` — texts, MP3/SRT/JSON audio packages, state and
+  voice cache.
 
 Move or back up the whole VoiceGun folder to preserve all materials. Do not
 place the application in a read-only directory such as `Program Files` unless
@@ -143,7 +184,8 @@ write permission has been granted.
 
 - `Ctrl+O` — open a document;
 - `Ctrl+Space` — speak the selected/current line;
-- `Space` — replay a completed A–B range;
+- `Space` — replay a completed A–B range in the main window; inside Cards it
+  repeats the current line or starts one A–B card cycle;
 - `F1` — open this guide.
 
 ## Author
