@@ -4,7 +4,7 @@ import re
 from collections.abc import Callable
 from dataclasses import dataclass
 
-from .errors import OperationCancelled
+from .errors import NetworkServiceError, OperationCancelled
 from .services import TranslationProvider
 
 ProgressCallback = Callable[[int, int], None]
@@ -58,7 +58,7 @@ def translate_preserving_layout(
     cancelled: Callable[[], bool] | None = None,
     progress: ProgressCallback | None = None,
     *,
-    limit: int = 4500,
+    limit: int = 1800,
 ) -> StructuredTranslationResult:
     """Translate logical paragraphs while preserving source line positions."""
     source_lines = text.split("\n")
@@ -95,22 +95,38 @@ def translate_preserving_layout(
     if progress:
         progress(0, total_chunks)
 
-    for group in request_groups:
+    def translate_group(group: list[_TranslationUnit]) -> list[tuple[_TranslationUnit, str]]:
+        """Translate a group, reducing the request after a remote rejection."""
         if cancelled and cancelled():
             raise OperationCancelled("Перевод отменён.")
         request = "\n".join(unit.text for unit in group)
-        response = provider.translate(request, cancelled).strip()
+        try:
+            response = provider.translate(request, cancelled).strip()
+        except NetworkServiceError:
+            if len(group) == 1:
+                raise
+            middle = len(group) // 2
+            return translate_group(group[:middle]) + translate_group(group[middle:])
+
         response_lines = response.splitlines()
-
         if len(group) > 1 and len(response_lines) != len(group):
-            response_lines = []
+            translated_units: list[tuple[_TranslationUnit, str]] = []
             for unit in group:
+                if cancelled and cancelled():
+                    raise OperationCancelled("Перевод отменён.")
                 translated = provider.translate(unit.text, cancelled)
-                response_lines.append(" ".join(translated.splitlines()).strip())
-        elif len(group) == 1:
+                translated_units.append(
+                    (unit, " ".join(translated.splitlines()).strip())
+                )
+            return translated_units
+        if len(group) == 1:
             response_lines = [" ".join(response_lines).strip()]
+        return list(zip(group, response_lines, strict=True))
 
-        for unit, translated in zip(group, response_lines, strict=True):
+    for group in request_groups:
+        if cancelled and cancelled():
+            raise OperationCancelled("Перевод отменён.")
+        for unit, translated in translate_group(group):
             if translated:
                 translated_parts[unit.line_index].append(translated)
             completed += 1

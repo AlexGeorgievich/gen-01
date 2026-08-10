@@ -10,7 +10,31 @@ _STRINGS: dict[str, tuple[str, str]] = {
         "VoiceGun",
     ),
     "open": ("Open…", "Открыть…"),
+    "open_text_menu": ("Open text…", "Открыть текст…"),
+    "text_packages": ("Text packages", "Пакеты текста"),
+    "open_package": ("Open package…", "Открыть пакет…"),
+    "package_history": ("Package history", "История пакетов"),
+    "package_language": ("Package language", "Язык пакета"),
+    "package_name": ("Package", "Пакет"),
+    "no_packages": (
+        "No complete offline packages were found for this language.",
+        "Для этого языка не найдены полные автономные пакеты.",
+    ),
+    "package_opened": (
+        "Offline package opened: {name}",
+        "Автономный пакет открыт: {name}",
+    ),
+    "package_saved": (
+        "Offline package saved: {name}",
+        "Автономный пакет сохранён: {name}",
+    ),
+    "history_empty": ("Package history is empty.", "История пакетов пуста."),
+    "history_open": ("Open", "Открыть"),
+    "history_remove": ("Remove from history", "Удалить из истории"),
+    "history_clear": ("Clear history", "Очистить историю"),
+    "history_missing": ("missing", "отсутствует"),
     "batch": ("Batch…", "Пакет…"),
+    "batch_translation": ("Batch translation…", "Пакетный перевод…"),
     "translate": ("Translate", "Перевести"),
     "speak": ("Speak", "Озвучить"),
     "replay": ("Replay", "Повторить"),
@@ -57,22 +81,30 @@ _STRINGS: dict[str, tuple[str, str]] = {
     "switch_windows": ("Switch windows", "Переключить окна"),
     "cards": ("Cards", "Карточки"),
     "cards_title": ("Learning cards", "Учебные карточки"),
-    "cards_all_badge": ("ALL LINES", "ВСЕ СТРОКИ"),
+    "cards_all_badge": ("ALL SENTENCES", "ВСЕ ПРЕДЛОЖЕНИЯ"),
     "cards_ab_badge": (
         "A–B · lines {start}–{end}",
         "A–B · строки {start}–{end}",
+    ),
+    "cards_ab_sentence_badge": (
+        "A–B · sentences {start}–{end}",
+        "A–B · предложения {start}–{end}",
     ),
     "cards_navigation_hint": (
         "← → or < > — navigate and speak",
         "← → или < > — переход и озвучивание",
     ),
     "cards_space_line_hint": (
-        "Space — repeat this line",
-        "Space — повторить текущую строку",
+        "Space — repeat this sentence",
+        "Space — повторить текущее предложение",
     ),
     "cards_space_range_hint": (
         "Space — play one A–B cycle",
         "Space — озвучить один цикл A–B",
+    ),
+    "cards_visibility_hint": (
+        "↑ — show supporting text · ↓ — hide supporting text",
+        "↑ — показать вспомогательный текст · ↓ — скрыть вспомогательный текст",
     ),
     "last_window_required": (
         "At least one text window must remain visible.",
@@ -188,6 +220,10 @@ _STRINGS: dict[str, tuple[str, str]] = {
     "audio_scope_range": (
         "A–B interval (lines {start}–{end})",
         "Интервал A–B (строки {start}–{end})",
+    ),
+    "audio_scope_sentence_range": (
+        "A–B interval (sentences {start}–{end})",
+        "Интервал A–B (предложения {start}–{end})",
     ),
     "audio_scope_full": ("Complete text", "Весь текст"),
     "save_audio_first": ("Generate speech first.", "Сначала озвучьте текст."),

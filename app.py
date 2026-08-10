@@ -20,6 +20,7 @@ from PySide6.QtGui import (
     QIcon,
     QKeySequence,
     QShortcut,
+    QTextCursor,
     QTextFormat,
 )
 from PySide6.QtMultimedia import QAudioOutput, QMediaPlayer
@@ -35,7 +36,10 @@ from PySide6.QtWidgets import (
     QGroupBox,
     QHBoxLayout,
     QLabel,
+    QListWidget,
+    QListWidgetItem,
     QMainWindow,
+    QMenu,
     QMessageBox,
     QProgressBar,
     QPushButton,
@@ -63,9 +67,23 @@ from gpt01.i18n import ui_text
 from gpt01.language_controller import LanguageController
 from gpt01.languages import LANGUAGES
 from gpt01.models import Document, SubtitleCue, TranslationRow
+from gpt01.packages import (
+    PackageHistoryEntry,
+    discover_packages,
+    load_offline_package,
+    load_package_history,
+    save_package_document,
+    save_package_history,
+    touch_package_history,
+)
 from gpt01.playback import PlaybackSequence
 from gpt01.preferences import AudioPreparationMode, Preferences
-from gpt01.rows import build_translation_rows, rows_between
+from gpt01.rows import (
+    build_sentence_translation_rows,
+    build_translation_rows,
+    rows_between,
+)
+from gpt01.sentences import sentence_spans
 from gpt01.services import EdgeSpeechProvider
 from gpt01.session import SessionRepository
 from gpt01.state import AppState
@@ -78,6 +96,7 @@ from gpt01.tasks import TaskManager
 from gpt01.timed_audio import (
     TimedAudioManifest,
     TimedAudioPackage,
+    TimedLine,
     build_timed_audio_package,
     load_manifest,
 )
@@ -118,6 +137,26 @@ logging.basicConfig(
 LOGGER = logging.getLogger(__name__)
 
 
+def _span(start: int | None, end: int | None) -> tuple[int, int] | None:
+    if start is None or end is None or end <= start:
+        return None
+    return start, end
+
+
+def _row_overlaps_span(row: TranslationRow, span: tuple[int, int]) -> bool:
+    if row.source_start is None or row.source_end is None:
+        return False
+    return row.source_start < span[1] and row.source_end > span[0]
+
+
+def _timed_matches_row(timed: TimedLine, row: TranslationRow) -> bool:
+    if timed.line != row.index:
+        return False
+    if timed.source_start is not None and row.source_start is not None:
+        return timed.source_start == row.source_start
+    return True
+
+
 class MainWindow(QMainWindow):
     def __init__(self, repository: SessionRepository | None = None) -> None:
         super().__init__()
@@ -132,8 +171,15 @@ class MainWindow(QMainWindow):
         self._hover_line_number: int | None = None
         self._audio_line_number: int | None = None
         self._replay_highlight_line: int | None = None
+        self._replay_source_span: tuple[int, int] | None = None
+        self._replay_translation_span: tuple[int, int] | None = None
+        self._replay_transcription_span: tuple[int, int] | None = None
         self._range_a_line: int | None = None
         self._range_b_line: int | None = None
+        self._range_a_span: tuple[int, int] | None = None
+        self._range_b_span: tuple[int, int] | None = None
+        self._range_a_sentence_number: int | None = None
+        self._range_b_sentence_number: int | None = None
         self._sequence_scope: str | None = None
         self._sequence_audio_parts: list[Path] = []
         self._ab_repeat_ready = False
@@ -196,7 +242,19 @@ class MainWindow(QMainWindow):
             button.setMaximumWidth(90)
 
         self.open_button = QPushButton(self._t("open"))
-        self.batch_button = QPushButton(self._t("batch"))
+        self.open_menu = QMenu(self.open_button)
+        self.open_text_action = self.open_menu.addAction(self._t("open_text_menu"))
+        self.batch_translation_action = self.open_menu.addAction(
+            self._t("batch_translation")
+        )
+        self.text_packages_menu = self.open_menu.addMenu(self._t("text_packages"))
+        self.open_package_action = self.text_packages_menu.addAction(
+            self._t("open_package")
+        )
+        self.package_history_action = self.text_packages_menu.addAction(
+            self._t("package_history")
+        )
+        self.open_button.setMenu(self.open_menu)
         self.translate_button = QPushButton(self._t("translate"))
         self.speak_button = QPushButton(self._t("speak"))
         self.replay_button = QPushButton(self._t("replay"))
@@ -352,7 +410,11 @@ class MainWindow(QMainWindow):
         self.transcription_edit.setPlaceholderText(self._t("transcription_placeholder"))
         self.source_title.setText(self._t("source_text"))
         self.open_button.setText(self._t("open"))
-        self.batch_button.setText(self._t("batch"))
+        self.open_text_action.setText(self._t("open_text_menu"))
+        self.text_packages_menu.setTitle(self._t("text_packages"))
+        self.open_package_action.setText(self._t("open_package"))
+        self.package_history_action.setText(self._t("package_history"))
+        self.batch_translation_action.setText(self._t("batch_translation"))
         self.translate_button.setText(self._t("translate"))
         self.speak_button.setText(self._t("speak"))
         self.replay_button.setText(self._t("replay"))
@@ -427,7 +489,6 @@ class MainWindow(QMainWindow):
         toolbar = self.addToolBar("Commands")
         toolbar.setMovable(False)
         toolbar.addWidget(self.open_button)
-        toolbar.addWidget(self.batch_button)
         toolbar.addSeparator()
         toolbar.addWidget(self.translate_button)
         toolbar.addWidget(self.speak_button)
@@ -599,8 +660,10 @@ class MainWindow(QMainWindow):
             self._panel_shadows.append(shadow)
 
     def _connect_signals(self) -> None:
-        self.open_button.clicked.connect(self.open_file)
-        self.batch_button.clicked.connect(self.batch_process_files)
+        self.open_text_action.triggered.connect(self.open_file)
+        self.open_package_action.triggered.connect(self.open_package)
+        self.package_history_action.triggered.connect(self.open_package_history)
+        self.batch_translation_action.triggered.connect(self.batch_process_files)
         self.translate_button.clicked.connect(self.translate_text)
         self.speak_button.clicked.connect(self.speak_text)
         self.replay_button.clicked.connect(self.replay_audio)
@@ -866,7 +929,7 @@ class MainWindow(QMainWindow):
         self.translate_button.setEnabled(not busy)
         self.speak_button.setEnabled(not busy)
         self.open_button.setEnabled(not busy)
-        self.batch_button.setEnabled(not busy)
+        self.batch_translation_action.setEnabled(not busy)
         self.settings_button.setEnabled(not busy)
         self.language_combo.setEnabled(not busy and self.reload_voices_button.isEnabled())
         self.cancel_button.setEnabled(busy)
@@ -910,6 +973,181 @@ class MainWindow(QMainWindow):
         except AppError as exc:
             self._loading_document = False
             self._show_error(str(exc))
+
+    @Slot()
+    def open_package(self) -> None:
+        if not self._confirm_discard_changes():
+            return
+        dialog = QDialog(self)
+        dialog.setWindowTitle(self._t("open_package"))
+        form = QFormLayout(dialog)
+        language_combo = QComboBox(dialog)
+        package_combo = QComboBox(dialog)
+        for profile in LANGUAGES:
+            language_combo.addItem(profile.label, profile.key)
+        current_index = language_combo.findData(self.current_language.key)
+        if current_index >= 0:
+            language_combo.setCurrentIndex(current_index)
+
+        def populate_packages() -> None:
+            package_combo.clear()
+            language_key = str(language_combo.currentData())
+            profile = next(item for item in LANGUAGES if item.key == language_key)
+            for package in discover_packages(
+                self.repository.language_directory(profile), language_key
+            ):
+                package_combo.addItem(package.stem, str(package.audio_path))
+
+        language_combo.currentIndexChanged.connect(populate_packages)
+        populate_packages()
+        form.addRow(self._t("package_language"), language_combo)
+        form.addRow(self._t("package_name"), package_combo)
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Open
+            | QDialogButtonBox.StandardButton.Cancel,
+            parent=dialog,
+        )
+        buttons.button(QDialogButtonBox.StandardButton.Open).setEnabled(
+            package_combo.count() > 0
+        )
+        language_combo.currentIndexChanged.connect(
+            lambda: buttons.button(QDialogButtonBox.StandardButton.Open).setEnabled(
+                package_combo.count() > 0
+            )
+        )
+        buttons.accepted.connect(dialog.accept)
+        buttons.rejected.connect(dialog.reject)
+        form.addRow(buttons)
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+        if package_combo.count() <= 0:
+            QMessageBox.information(self, self.windowTitle(), self._t("no_packages"))
+            return
+        self._open_offline_package(
+            Path(str(package_combo.currentData())),
+            str(language_combo.currentData()),
+        )
+
+    def _open_offline_package(self, audio_path: Path, language_key: str) -> bool:
+        try:
+            package = load_offline_package(audio_path, language_key)
+            language_index = self.language_combo.findData(language_key)
+            if language_index < 0:
+                raise ValueError(f"Unknown language: {language_key}")
+            self._dirty = False
+            self.language_combo.setCurrentIndex(language_index)
+            self._reset_audio_state()
+            self._loading_document = True
+            self.source_edit.setPlainText(package.document.original)
+            self.translation_edit.setPlainText(package.document.translation)
+            self.transcription_edit.setPlainText(package.document.transcription)
+            self._loading_document = False
+            self.current_source_path = package.text_path
+            self.subtitle_cues = ()
+            self.tts_settings = TtsSettings(
+                rate=package.manifest.rate,
+                pitch=package.manifest.pitch,
+                volume=package.manifest.volume,
+            )
+            voice_index = self.voice_combo.findData(package.manifest.voice)
+            if voice_index >= 0:
+                self.voice_combo.setCurrentIndex(voice_index)
+            self.audio_path = package.audio_path
+            self.audio_manifest_path = package.manifest_path
+            self.audio_srt_path = package.srt_path
+            self.timed_manifest = package.manifest
+            self._audio_is_complete_document = True
+            self.player.setSource(QUrl.fromLocalFile(str(package.audio_path)))
+            self._reset_range_markers()
+            self._dirty = False
+            self._remember_directory("last_open_directory", package.audio_path.parent)
+            touch_package_history(
+                self.repository.package_history_path,
+                language_key,
+                package.audio_path,
+            )
+            self._update_save_audio_button()
+            self.replay_button.setEnabled(True)
+            self.statusBar().showMessage(
+                self._t("package_opened", name=package.stem)
+            )
+            return True
+        except (AppError, OSError, ValueError) as exc:
+            self._loading_document = False
+            self._show_error(str(exc))
+            return False
+
+    @Slot()
+    def open_package_history(self) -> None:
+        entries = load_package_history(self.repository.package_history_path)
+        dialog = QDialog(self)
+        dialog.setWindowTitle(self._t("package_history"))
+        dialog.resize(680, 360)
+        layout = QVBoxLayout(dialog)
+        history_list = QListWidget(dialog)
+        layout.addWidget(history_list, 1)
+        controls = QHBoxLayout()
+        open_button = QPushButton(self._t("history_open"), dialog)
+        remove_button = QPushButton(self._t("history_remove"), dialog)
+        clear_button = QPushButton(self._t("history_clear"), dialog)
+        close_button = QPushButton(self._t("close"), dialog)
+        controls.addWidget(open_button)
+        controls.addWidget(remove_button)
+        controls.addWidget(clear_button)
+        controls.addStretch(1)
+        controls.addWidget(close_button)
+        layout.addLayout(controls)
+
+        def refill() -> None:
+            history_list.clear()
+            current_entries = load_package_history(self.repository.package_history_path)
+            for entry in current_entries:
+                exists = Path(entry.audio_path).is_file()
+                suffix = "" if exists else f" — {self._t('history_missing')}"
+                item = QListWidgetItem(
+                    f"{entry.name} · {entry.language} · {entry.last_used}{suffix}"
+                )
+                item.setData(Qt.ItemDataRole.UserRole, entry)
+                history_list.addItem(item)
+            enabled = history_list.count() > 0
+            open_button.setEnabled(enabled)
+            remove_button.setEnabled(enabled)
+            clear_button.setEnabled(enabled)
+
+        def selected_entry() -> PackageHistoryEntry | None:
+            item = history_list.currentItem()
+            return item.data(Qt.ItemDataRole.UserRole) if item else None
+
+        def open_selected() -> None:
+            entry = selected_entry()
+            if entry is None or not self._confirm_discard_changes():
+                return
+            if self._open_offline_package(Path(entry.audio_path), entry.language):
+                dialog.accept()
+
+        def remove_selected() -> None:
+            entry = selected_entry()
+            if entry is None:
+                return
+            remaining = [item for item in load_package_history(
+                self.repository.package_history_path
+            ) if item.audio_path != entry.audio_path]
+            save_package_history(self.repository.package_history_path, remaining)
+            refill()
+
+        open_button.clicked.connect(open_selected)
+        history_list.itemDoubleClicked.connect(lambda _item: open_selected())
+        remove_button.clicked.connect(remove_selected)
+        def clear_history() -> None:
+            save_package_history(self.repository.package_history_path, [])
+            refill()
+
+        clear_button.clicked.connect(clear_history)
+        close_button.clicked.connect(dialog.reject)
+        refill()
+        if not entries:
+            self.statusBar().showMessage(self._t("history_empty"))
+        dialog.exec()
 
     @Slot()
     def batch_process_files(self) -> None:
@@ -998,7 +1236,7 @@ class MainWindow(QMainWindow):
             transcription = self.language_controller.transcribe(translated.text)
             if not prepare_complete_package:
                 return translated, transcription, None, ""
-            rows = build_translation_rows(text, translated.text, transcription)
+            rows = build_sentence_translation_rows(text, translated.text, transcription)
             if not voice:
                 return translated, transcription, None, self._t("voice_not_selected")
             audio_path, manifest_path, srt_path = self._temporary_audio_package_paths()
@@ -1027,6 +1265,12 @@ class MainWindow(QMainWindow):
                             current=current,
                             total=total,
                         ),
+                    ),
+                    resume_root=(
+                        self.repository.ensure_language_directory(
+                            self.current_language
+                        )
+                        / "tts_jobs"
                     ),
                 )
                 return translated, transcription, package, ""
@@ -1151,6 +1395,9 @@ class MainWindow(QMainWindow):
 
     @Slot()
     def speak_text(self) -> None:
+        if self._range_a_line is not None and self._range_b_line is not None:
+            self._start_ab_sequence()
+            return
         if self._timed_audio_ready():
             self._start_timed_playback(0, None, "all")
         else:
@@ -1160,27 +1407,37 @@ class MainWindow(QMainWindow):
     def speak_line_at_cursor(self) -> None:
         mouse_pos_src = self.source_edit.viewport().mapFromGlobal(QCursor.pos())
         mouse_pos_trans = self.translation_edit.viewport().mapFromGlobal(QCursor.pos())
+        rows = build_sentence_translation_rows(
+            self.source_edit.toPlainText(),
+            self.translation_edit.toPlainText(),
+            self.transcription_edit.toPlainText(),
+        )
 
         if self.source_edit.viewport().rect().contains(mouse_pos_src):
             cursor = self.source_edit.cursorForPosition(mouse_pos_src)
-            line_text = cursor.block().text().strip()
-            source_line_text = line_text
+            row = self._sentence_row_at_cursor(
+                rows, cursor.position(), cursor.blockNumber(), "source"
+            )
             needs_translation = True
         elif self.translation_edit.viewport().rect().contains(mouse_pos_trans):
             cursor = self.translation_edit.cursorForPosition(mouse_pos_trans)
-            line_text = cursor.block().text().strip()
-            source_cursor = self.source_edit.document().findBlockByNumber(
-                cursor.blockNumber()
+            row = self._sentence_row_at_cursor(
+                rows, cursor.position(), cursor.blockNumber(), "translation"
             )
-            source_line_text = source_cursor.text().strip() if source_cursor.isValid() else ""
             needs_translation = False
         else:
             cursor = self.source_edit.textCursor()
-            line_text = cursor.block().text().strip()
-            source_line_text = line_text
+            row = self._sentence_row_at_cursor(
+                rows, cursor.position(), cursor.blockNumber(), "source"
+            )
             needs_translation = True
 
-        line_number = cursor.blockNumber()
+        if row is None:
+            self.statusBar().showMessage(self._t("empty_hover_line"))
+            return
+        line_number = row.index
+        source_line_text = row.source
+        line_text = row.source if needs_translation else row.translation
 
         if not line_text:
             self.statusBar().showMessage(self._t("empty_hover_line"))
@@ -1188,7 +1445,15 @@ class MainWindow(QMainWindow):
 
         if self._timed_audio_ready() and self.timed_manifest:
             timed_line = next(
-                (line for line in self.timed_manifest.lines if line.line == line_number),
+                (
+                    line
+                    for line in self.timed_manifest.lines
+                    if line.line == line_number
+                    and (
+                        row.source_start is None
+                        or line.source_start == row.source_start
+                    )
+                ),
                 None,
             )
             if timed_line:
@@ -1251,7 +1516,7 @@ class MainWindow(QMainWindow):
                 )
                 self._dirty = True
             self._audio_line_number = line_number
-            self._show_synchronized_line(line_number)
+            self._show_synchronized_row(row)
             self.statusBar().showMessage(self._t("line_result", text=translated_line))
             self._play_file(filename)
 
@@ -1260,6 +1525,22 @@ class MainWindow(QMainWindow):
             on_ready,
             self._t("line_synthesis", text=f"{line_text[:25]}…"),
         )
+
+    @staticmethod
+    def _sentence_row_at_cursor(
+        rows: list[TranslationRow],
+        position: int,
+        line_number: int,
+        field: str,
+    ) -> TranslationRow | None:
+        start_name = f"{field}_start"
+        end_name = f"{field}_end"
+        for row in rows:
+            start = getattr(row, start_name)
+            end = getattr(row, end_name)
+            if start is not None and end is not None and start <= position <= end:
+                return row
+        return next((row for row in rows if row.index == line_number), None)
 
     def _play_file(self, filename: str) -> None:
         previous_audio = self.audio_path
@@ -1481,6 +1762,14 @@ class MainWindow(QMainWindow):
             return rows_between(rows, self._range_a_line, self._range_b_line)
         return rows
 
+    def _card_playback_rows(self) -> list[TranslationRow]:
+        rows = build_sentence_translation_rows(
+            self.source_edit.toPlainText(),
+            self.translation_edit.toPlainText(),
+            self.transcription_edit.toPlainText(),
+        )
+        return self._rows_in_ab_range(rows) if self._has_ab_range() else rows
+
     def _initial_card_line(self, line_numbers: list[int]) -> int:
         candidates = (
             self._replay_highlight_line,
@@ -1498,20 +1787,31 @@ class MainWindow(QMainWindow):
         return block.text().strip() if block.isValid() else ""
 
     def _card_fields(self, line_number: int) -> list[CardField]:
-        source = CardField(
-            self._t("source_text"),
+        return self._ordered_card_fields(
             self._editor_line(self.source_edit, line_number),
-            kind="source",
-        )
-        translation = CardField(
-            self.translation_title.text(),
             self._editor_line(self.translation_edit, line_number),
-            kind="translation",
+            self._editor_line(self.transcription_edit, line_number),
+        )
+
+    def _card_fields_for_row(self, row: TranslationRow) -> list[CardField]:
+        return self._ordered_card_fields(
+            row.source,
+            row.translation,
+            row.transcription,
+        )
+
+    def _ordered_card_fields(
+        self,
+        source_text: str,
+        translation_text: str,
+        transcription_text: str,
+    ) -> list[CardField]:
+        source = CardField(self._t("source_text"), source_text, kind="source")
+        translation = CardField(
+            self.translation_title.text(), translation_text, kind="translation"
         )
         transcription = CardField(
-            self.transcription_title.text(),
-            self._editor_line(self.transcription_edit, line_number),
-            kind="transcription",
+            self.transcription_title.text(), transcription_text, kind="transcription"
         )
         visible = {
             "source": not self.source_box.isHidden(),
@@ -1548,13 +1848,34 @@ class MainWindow(QMainWindow):
         ]
 
     def _play_card_line(self, line_number: int) -> None:
-        rows = [row for row in self._card_rows() if row.index == line_number]
+        rows = [row for row in self._card_playback_rows() if row.index == line_number]
         if not rows:
             return
         self._show_synchronized_line(line_number)
         if self._timed_audio_ready() and self.timed_manifest:
+            interval = self.timed_manifest.interval(line_number, line_number)
+            if interval:
+                self._start_timed_playback(
+                    interval[0],
+                    interval[1],
+                    "cards",
+                )
+                return
+        self._begin_sequence(rows, "cards")
+
+    def _play_card_row(self, row: TranslationRow) -> None:
+        self._show_synchronized_row(row)
+        if self._timed_audio_ready() and self.timed_manifest:
             timed_line = next(
-                (line for line in self.timed_manifest.lines if line.line == line_number),
+                (
+                    item
+                    for item in self.timed_manifest.lines
+                    if item.line == row.index
+                    and (
+                        row.source_start is None
+                        or item.source_start == row.source_start
+                    )
+                ),
                 None,
             )
             if timed_line:
@@ -1564,9 +1885,12 @@ class MainWindow(QMainWindow):
                     "cards",
                 )
                 return
-        self._begin_sequence(rows, "cards")
+        self._begin_sequence([row], "cards")
 
-    def _play_card_range_cycle(self) -> None:
+    def _play_card_range_cycle(
+        self,
+        selected_rows: list[TranslationRow] | None = None,
+    ) -> None:
         if self._timed_playback_active:
             if self._timed_playback_scope == "cards_range":
                 return
@@ -1581,11 +1905,11 @@ class MainWindow(QMainWindow):
                 self._stop_sequence()
             else:
                 return
-        rows = self._card_rows()
+        rows = list(selected_rows) if selected_rows is not None else self._card_playback_rows()
         if not rows:
             return
         if self._timed_audio_ready() and self.timed_manifest:
-            interval = self.timed_manifest.interval(rows[0].index, rows[-1].index)
+            interval = self._timed_interval_for_rows(rows)
             if interval:
                 self._start_timed_playback(interval[0], interval[1], "cards_range")
                 return
@@ -1602,26 +1926,69 @@ class MainWindow(QMainWindow):
 
     @Slot()
     def open_cards(self) -> None:
-        rows = self._card_rows()
-        if not rows:
+        playback_rows = self._card_playback_rows()
+        if not playback_rows:
             QMessageBox.information(self, self.windowTitle(), self._t("no_card_lines"))
             return
         self.stop_current_operation()
-        line_numbers = [row.index for row in rows]
+        line_numbers = list(dict.fromkeys(row.index for row in playback_rows))
         initial_line = self._initial_card_line(line_numbers)
         has_ab_range = self._range_a_line is not None and self._range_b_line is not None
+        cursor_position = self.source_edit.textCursor().position()
         self._show_synchronized_line(initial_line)
+        card_numbers = list(range(len(playback_rows)))
+        initial_card = next(
+            (
+                position
+                for position, row in enumerate(playback_rows)
+                if row.index == initial_line
+                and (
+                    row.source_start is None
+                    or row.source_start <= cursor_position <= row.source_end
+                )
+            ),
+            next(
+                (
+                    position
+                    for position, row in enumerate(playback_rows)
+                    if row.index == initial_line
+                ),
+                0,
+            ),
+        )
+
+        def fields_for_card(position: int) -> list[CardField]:
+            return self._card_fields_for_row(playback_rows[position])
+
+        def speak_card(position: int) -> None:
+            self._play_card_row(playback_rows[position])
+
+        def repeat_cards_range() -> None:
+            self._play_card_range_cycle(playback_rows)
+
         dialog = FlashcardsDialog(
-            line_numbers,
-            initial_line,
-            self._card_fields,
-            self._play_card_line,
+            card_numbers,
+            initial_card,
+            fields_for_card,
+            speak_card,
             lambda: self.tasks.foreground is None,
-            self._play_card_range_cycle if has_ab_range else None,
+            repeat_cards_range if has_ab_range else None,
             title=self._t("cards_title"),
             close_text=self._t("close"),
             mode_text=(
                 self._t(
+                    "cards_ab_sentence_badge",
+                    start=min(
+                        self._range_a_sentence_number,
+                        self._range_b_sentence_number,
+                    ),
+                    end=max(
+                        self._range_a_sentence_number,
+                        self._range_b_sentence_number,
+                    ),
+                )
+                if self._uses_sentence_markers()
+                else self._t(
                     "cards_ab_badge",
                     start=min(self._range_a_line, self._range_b_line) + 1,
                     end=max(self._range_a_line, self._range_b_line) + 1,
@@ -1633,9 +2000,11 @@ class MainWindow(QMainWindow):
             space_hint=self._t(
                 "cards_space_range_hint" if has_ab_range else "cards_space_line_hint"
             ),
+            visibility_hint=self._t("cards_visibility_hint"),
             primary_font_size=self.preferences.card_primary_font_size,
             secondary_font_size=self.preferences.card_secondary_font_size,
             cycle_navigation=has_ab_range,
+            item_ids_are_lines=False,
             parent=self,
         )
         self._active_cards_dialog = dialog
@@ -1661,23 +2030,52 @@ class MainWindow(QMainWindow):
         if not block.isValid():
             self.statusBar().showMessage(self._t("marker_caret", marker=marker))
             return
-        line_number = block.blockNumber()
+        all_spans = sentence_spans(self.source_edit.toPlainText())
+        selected_span = next(
+            (
+                span
+                for span in all_spans
+                if span.start <= cursor.position() <= span.end
+            ),
+            next((span for span in all_spans if span.line == block.blockNumber()), None),
+        )
+        if selected_span is None:
+            self.statusBar().showMessage(self._t("marker_caret", marker=marker))
+            return
+        line_number = selected_span.line
+        sentence_number = all_spans.index(selected_span) + 1
+        span_range = (selected_span.start, selected_span.end)
+        line_sentence_count = sum(span.line == line_number for span in all_spans)
+        display_number = sentence_number if line_sentence_count > 1 else line_number + 1
+        button_text = (
+            f"{marker}:S{display_number}"
+            if line_sentence_count > 1
+            else f"{marker}:{display_number}"
+        )
         if marker == "A":
             self._range_a_line = line_number
-            self.mark_a_button.setText(f"A:{line_number + 1}")
+            self._range_a_span = span_range
+            self._range_a_sentence_number = sentence_number
+            self.mark_a_button.setText(button_text)
         else:
             self._range_b_line = line_number
-            self.mark_b_button.setText(f"B:{line_number + 1}")
+            self._range_b_span = span_range
+            self._range_b_sentence_number = sentence_number
+            self.mark_b_button.setText(button_text)
         self._ab_repeat_ready = False
         self._render_source_highlights()
         self._update_ab_controls()
         self.statusBar().showMessage(
-            self._t("marker_set", marker=marker, line=line_number + 1)
+            self._t("marker_set", marker=marker, line=display_number)
         )
 
     def _reset_range_markers(self) -> None:
         self._range_a_line = None
         self._range_b_line = None
+        self._range_a_span = None
+        self._range_b_span = None
+        self._range_a_sentence_number = None
+        self._range_b_sentence_number = None
         self._ab_repeat_ready = False
         self.mark_a_button.setText("A")
         self.mark_b_button.setText("B")
@@ -1721,6 +2119,84 @@ class MainWindow(QMainWindow):
                 and self._active_cards_dialog is None
             )
 
+    def _has_ab_range(self) -> bool:
+        return self._range_a_line is not None and self._range_b_line is not None
+
+    def _uses_sentence_markers(self) -> bool:
+        return bool(
+            self._has_ab_range()
+            and self._range_a_line == self._range_b_line
+            and self._range_a_span != self._range_b_span
+            and self._range_a_sentence_number is not None
+            and self._range_b_sentence_number is not None
+        )
+
+    def _rows_in_ab_range(
+        self,
+        rows: list[TranslationRow],
+    ) -> list[TranslationRow]:
+        if not self._has_ab_range():
+            return rows
+        if self._range_a_span and self._range_b_span:
+            first_span, last_span = sorted(
+                (self._range_a_span, self._range_b_span), key=lambda span: span[0]
+            )
+            first_matches = [
+                index
+                for index, row in enumerate(rows)
+                if _row_overlaps_span(row, first_span)
+            ]
+            last_matches = [
+                index
+                for index, row in enumerate(rows)
+                if _row_overlaps_span(row, last_span)
+            ]
+            if first_matches and last_matches:
+                start = min(first_matches)
+                end = max(last_matches)
+                return rows[min(start, end) : max(start, end) + 1]
+        return rows_between(
+            rows,
+            self._range_a_line or 0,
+            self._range_b_line or 0,
+        )
+
+    def _timed_interval_for_rows(
+        self,
+        rows: list[TranslationRow],
+    ) -> tuple[int, int] | None:
+        timed_rows = self._timed_lines_for_rows(rows)
+        if not timed_rows:
+            return None
+        return timed_rows[0].start_ms, timed_rows[-1].end_ms
+
+    def _timed_lines_for_rows(
+        self,
+        rows: list[TranslationRow],
+    ) -> list[TimedLine]:
+        if not rows or not self.timed_manifest:
+            return []
+        first_match = next(
+            (
+                index
+                for index, timed in enumerate(self.timed_manifest.lines)
+                if _timed_matches_row(timed, rows[0])
+            ),
+            None,
+        )
+        last_match = next(
+            (
+                index
+                for index in range(len(self.timed_manifest.lines) - 1, -1, -1)
+                if _timed_matches_row(self.timed_manifest.lines[index], rows[-1])
+            ),
+            None,
+        )
+        if first_match is None or last_match is None:
+            return []
+        start, end = sorted((first_match, last_match))
+        return list(self.timed_manifest.lines[start : end + 1])
+
     def eventFilter(self, watched: QObject, event: QEvent) -> bool:
         if watched is self.source_edit.viewport():
             if event.type() in {QEvent.Type.MouseMove, QEvent.Type.MouseButtonPress}:
@@ -1735,18 +2211,31 @@ class MainWindow(QMainWindow):
 
     def _render_source_highlights(self) -> None:
         selections: list[QTextEdit.ExtraSelection] = []
-        if self._range_a_line is not None and self._range_a_line == self._range_b_line:
-            marker_highlights = ((self._range_a_line, QColor("#d1c4e9")),)
+        if (
+            self._range_a_line is not None
+            and self._range_a_line == self._range_b_line
+            and self._range_a_span == self._range_b_span
+        ):
+            marker_highlights = (
+                (self._range_a_line, self._range_a_span, QColor("#d1c4e9")),
+            )
         else:
             marker_highlights = (
-                (self._range_a_line, QColor("#c8e6c9")),
-                (self._range_b_line, QColor("#bbdefb")),
+                (self._range_a_line, self._range_a_span, QColor("#c8e6c9")),
+                (self._range_b_line, self._range_b_span, QColor("#bbdefb")),
             )
-        highlights = marker_highlights + (
-            (self._hover_line_number, QColor("#fff59d")),
-            (self._replay_highlight_line, QColor("#ffd54f")),
-        )
-        for line_number, color in highlights:
+        for line_number, span, color in marker_highlights:
+            if line_number is None:
+                continue
+            selections.append(
+                self._text_or_line_selection(
+                    self.source_edit,
+                    span,
+                    line_number,
+                    color,
+                )
+            )
+        for line_number, color in ((self._hover_line_number, QColor("#fff59d")),):
             if line_number is None:
                 continue
             block = self.source_edit.document().findBlockByNumber(line_number)
@@ -1760,15 +2249,31 @@ class MainWindow(QMainWindow):
             selection.format.setBackground(color)
             selection.format.setProperty(QTextFormat.Property.FullWidthSelection, True)
             selections.append(selection)
+        if self._replay_highlight_line is not None:
+            selections.append(
+                self._text_or_line_selection(
+                    self.source_edit,
+                    self._replay_source_span,
+                    self._replay_highlight_line,
+                    QColor("#ffd54f"),
+                )
+            )
         self.source_edit.setExtraSelections(selections)
-        self._set_line_highlight(
-            self.translation_edit, self._replay_highlight_line, QColor("#ffd54f")
+        self._set_text_or_line_highlight(
+            self.translation_edit,
+            self._replay_translation_span,
+            self._replay_highlight_line,
+            QColor("#ffd54f"),
         )
-        self._set_line_highlight(
-            self.transcription_edit, self._replay_highlight_line, QColor("#ffd54f")
+        self._set_text_or_line_highlight(
+            self.transcription_edit,
+            self._replay_transcription_span,
+            self._replay_highlight_line,
+            QColor("#ffd54f"),
         )
 
     def _show_synchronized_line(self, line_number: int) -> None:
+        self._set_replay_spans(None, None, None)
         self._replay_highlight_line = line_number
         self._render_source_highlights()
         if self._active_cards_dialog:
@@ -1779,6 +2284,74 @@ class MainWindow(QMainWindow):
             self.transcription_edit,
         ):
             self._scroll_editor_to_line(editor, line_number)
+
+    def _show_synchronized_row(
+        self,
+        row: TranslationRow,
+        card_progress: tuple[int, int] | None = None,
+    ) -> None:
+        self._replay_highlight_line = row.index
+        self._set_replay_spans(
+            _span(row.source_start, row.source_end),
+            _span(row.translation_start, row.translation_end),
+            _span(row.transcription_start, row.transcription_end),
+        )
+        self._render_source_highlights()
+        if self._active_cards_dialog:
+            if card_progress:
+                current, total = card_progress
+            elif self.sequence.active and self._sequence_scope in {
+                "cards",
+                "cards_range",
+            }:
+                current, total = self.sequence.progress
+            else:
+                current = total = None
+            self._active_cards_dialog.show_playback_fields(
+                row.index,
+                self._card_fields_for_row(row),
+                current,
+                total,
+            )
+        self._scroll_editor_to_span(self.source_edit, self._replay_source_span, row.index)
+        self._scroll_editor_to_span(
+            self.translation_edit,
+            self._replay_translation_span,
+            row.index,
+        )
+        self._scroll_editor_to_span(
+            self.transcription_edit,
+            self._replay_transcription_span,
+            row.index,
+        )
+
+    def _set_replay_spans(
+        self,
+        source: tuple[int, int] | None,
+        translation: tuple[int, int] | None,
+        transcription: tuple[int, int] | None,
+    ) -> None:
+        self._replay_source_span = source
+        self._replay_translation_span = translation
+        self._replay_transcription_span = transcription
+
+    @classmethod
+    def _scroll_editor_to_span(
+        cls,
+        editor: QTextEdit,
+        span: tuple[int, int] | None,
+        fallback_line: int,
+    ) -> None:
+        if not span:
+            cls._scroll_editor_to_line(editor, fallback_line)
+            return
+        cursor = editor.textCursor()
+        cursor.setPosition(min(span[0], editor.document().characterCount() - 1))
+        cursor_rect = editor.cursorRect(cursor)
+        if editor.viewport().rect().contains(cursor_rect.center()) and editor.isVisible():
+            return
+        editor.setTextCursor(cursor)
+        editor.ensureCursorVisible()
 
     @staticmethod
     def _scroll_editor_to_line(editor: QTextEdit, line_number: int) -> None:
@@ -1810,6 +2383,44 @@ class MainWindow(QMainWindow):
         selection.format.setBackground(color)
         selection.format.setProperty(QTextFormat.Property.FullWidthSelection, True)
         editor.setExtraSelections([selection])
+
+    @classmethod
+    def _set_text_or_line_highlight(
+        cls,
+        editor: QTextEdit,
+        span: tuple[int, int] | None,
+        line_number: int | None,
+        color: QColor,
+    ) -> None:
+        if line_number is None:
+            editor.setExtraSelections([])
+            return
+        editor.setExtraSelections(
+            [cls._text_or_line_selection(editor, span, line_number, color)]
+        )
+
+    @staticmethod
+    def _text_or_line_selection(
+        editor: QTextEdit,
+        span: tuple[int, int] | None,
+        line_number: int,
+        color: QColor,
+    ) -> QTextEdit.ExtraSelection:
+        cursor = editor.textCursor()
+        selection = QTextEdit.ExtraSelection()
+        if span and span[0] < span[1]:
+            maximum = max(0, editor.document().characterCount() - 1)
+            cursor.setPosition(min(span[0], maximum))
+            cursor.setPosition(min(span[1], maximum), QTextCursor.MoveMode.KeepAnchor)
+        else:
+            block = editor.document().findBlockByNumber(line_number)
+            if block.isValid():
+                cursor.setPosition(block.position())
+            cursor.clearSelection()
+            selection.format.setProperty(QTextFormat.Property.FullWidthSelection, True)
+        selection.cursor = cursor
+        selection.format.setBackground(color)
+        return selection
 
     @Slot()
     def cancel_operation(self) -> None:
@@ -1849,13 +2460,16 @@ class MainWindow(QMainWindow):
 
     @Slot()
     def replay_audio(self) -> None:
+        if self._range_a_line is not None and self._range_b_line is not None:
+            self._start_ab_sequence()
+            return
         if self._timed_audio_ready():
             self._start_timed_playback(0, None, "all")
         else:
             self._start_sequence()
 
     def _start_sequence(self) -> None:
-        rows = build_translation_rows(
+        rows = build_sentence_translation_rows(
             self.source_edit.toPlainText(),
             self.translation_edit.toPlainText(),
             self.transcription_edit.toPlainText(),
@@ -1889,24 +2503,19 @@ class MainWindow(QMainWindow):
                 self, self.windowTitle(), self._t("set_markers_first")
             )
             return
-        if self._timed_audio_ready() and self.timed_manifest:
-            interval = self.timed_manifest.interval(
-                self._range_a_line,
-                self._range_b_line,
+        rows = self._rows_in_ab_range(
+            build_sentence_translation_rows(
+                self.source_edit.toPlainText(),
+                self.translation_edit.toPlainText(),
+                self.transcription_edit.toPlainText(),
             )
+        )
+        if self._timed_audio_ready() and self.timed_manifest:
+            interval = self._timed_interval_for_rows(rows)
             if interval:
                 self._ab_repeat_ready = False
                 self._start_timed_playback(interval[0], interval[1], "ab")
                 return
-        rows = rows_between(
-            build_translation_rows(
-                self.source_edit.toPlainText(),
-                self.translation_edit.toPlainText(),
-                self.transcription_edit.toPlainText(),
-            ),
-            self._range_a_line,
-            self._range_b_line,
-        )
         if not rows:
             QMessageBox.information(
                 self,
@@ -1965,7 +2574,7 @@ class MainWindow(QMainWindow):
 
         line_number = row.index
         source_text = row.source
-        self._show_synchronized_line(line_number)
+        self._show_synchronized_row(row)
         current, total = self.sequence.progress
         prefix = "A–B · " if self._sequence_scope == "ab" else ""
         self.statusBar().showMessage(
@@ -2237,17 +2846,13 @@ class MainWindow(QMainWindow):
             return
 
         source_text = self.source_edit.toPlainText()
-        selected_rows = build_translation_rows(
+        selected_rows = build_sentence_translation_rows(
             source_text,
             translation,
             self.transcription_edit.toPlainText(),
         )
         if audio_scope == "range":
-            selected_rows = rows_between(
-                selected_rows,
-                self._range_a_line or 0,
-                self._range_b_line or 0,
-            )
+            selected_rows = self._rows_in_ab_range(selected_rows)
             if not selected_rows:
                 QMessageBox.information(
                     self,
@@ -2305,13 +2910,17 @@ class MainWindow(QMainWindow):
                         "audio_package_progress",
                         current=current,
                         total=total,
+                        ),
                     ),
+                resume_root=(
+                    self.repository.ensure_language_directory(self.current_language)
+                    / "tts_jobs"
                 ),
             )
 
         def save_generated_package(package: TimedAudioPackage) -> None:
             if audio_scope == "range":
-                self._save_audio_package(package, target)
+                self._save_audio_package(package, target, register_package=False)
                 self.repository.delete_temporary_audio(package.audio_path)
                 self._update_save_audio_button()
                 return
@@ -2340,10 +2949,23 @@ class MainWindow(QMainWindow):
         dialog.setWindowTitle(self._t("save_mp3_title"))
         form = QFormLayout(dialog)
         scope_combo = QComboBox(dialog)
-        scope_combo.addItem(
-            self._t("audio_scope_range", start=first + 1, end=last + 1),
-            "range",
-        )
+        if self._uses_sentence_markers():
+            range_text = self._t(
+                "audio_scope_sentence_range",
+                start=min(
+                    self._range_a_sentence_number,
+                    self._range_b_sentence_number,
+                ),
+                end=max(
+                    self._range_a_sentence_number,
+                    self._range_b_sentence_number,
+                ),
+            )
+        else:
+            range_text = self._t(
+                "audio_scope_range", start=first + 1, end=last + 1
+            )
+        scope_combo.addItem(range_text, "range")
         scope_combo.addItem(self._t("audio_scope_full"), "full")
         form.addRow(self._t("audio_scope_prompt"), scope_combo)
         buttons = QDialogButtonBox(
@@ -2357,23 +2979,43 @@ class MainWindow(QMainWindow):
             return None
         return str(scope_combo.currentData())
 
-    def _save_audio_package(self, package: TimedAudioPackage, target: Path) -> None:
+    def _save_audio_package(
+        self,
+        package: TimedAudioPackage,
+        target: Path,
+        *,
+        register_package: bool = True,
+    ) -> None:
         try:
             json_target = target.with_suffix(".json")
             srt_target = target.with_suffix(".srt")
             shutil.copyfile(package.audio_path, target)
             shutil.copyfile(package.manifest_path, json_target)
             shutil.copyfile(package.srt_path, srt_target)
+            if register_package:
+                save_package_document(
+                    target,
+                    self.current_language.key,
+                    Document(
+                        self.source_edit.toPlainText(),
+                        self.translation_edit.toPlainText(),
+                        self.transcription_edit.toPlainText(),
+                    ),
+                )
+                touch_package_history(
+                    self.repository.package_history_path,
+                    self.current_language.key,
+                    target,
+                )
             self._remember_directory("last_export_directory", target.parent)
             self.statusBar().showMessage(
-                self._t(
-                    "audio_package_saved",
-                    mp3=target,
-                    json=json_target.name,
-                    srt=srt_target.name,
+                self._t("package_saved", name=target.stem)
+                if register_package
+                else self._t(
+                    "audio_package_saved", mp3=target, json=json_target.name, srt=srt_target.name
                 )
             )
-        except OSError as exc:
+        except (AppError, OSError) as exc:
             self._show_error(self._t("save_audio_failed", error=exc))
 
     @Slot()
@@ -2430,8 +3072,44 @@ class MainWindow(QMainWindow):
             self._finish_timed_playback()
             return
         timed_line = self.timed_manifest.line_at(position_ms)
-        if timed_line and timed_line.line != self._replay_highlight_line:
-            self._show_synchronized_line(timed_line.line)
+        if timed_line and (
+            timed_line.line != self._replay_highlight_line
+            or _span(timed_line.source_start, timed_line.source_end)
+            != self._replay_source_span
+        ):
+            self._show_synchronized_timed_line(timed_line)
+
+    def _show_synchronized_timed_line(self, timed_line: TimedLine) -> None:
+        row = TranslationRow(
+                index=timed_line.line,
+                source=timed_line.source,
+                translation=timed_line.translation,
+                transcription=timed_line.transcription,
+                source_start=timed_line.source_start,
+                source_end=timed_line.source_end,
+                translation_start=timed_line.translation_start,
+                translation_end=timed_line.translation_end,
+                transcription_start=timed_line.transcription_start,
+                transcription_end=timed_line.transcription_end,
+            )
+        card_progress = None
+        if self._active_cards_dialog and self.timed_manifest:
+            candidates = list(self.timed_manifest.lines)
+            if (
+                self._timed_playback_scope == "cards_range"
+                and self._has_ab_range()
+            ):
+                candidates = self._timed_lines_for_rows(self._card_playback_rows())
+            elif self._timed_playback_scope == "cards":
+                candidates = [
+                    item for item in candidates if item.line == timed_line.line
+                ]
+            try:
+                current = candidates.index(timed_line) + 1
+            except ValueError:
+                current = 1
+            card_progress = current, max(1, len(candidates))
+        self._show_synchronized_row(row, card_progress)
 
     def _finish_timed_playback(self) -> None:
         completed_scope = self._timed_playback_scope

@@ -52,6 +52,7 @@ class SessionRepository:
         self.data_root = data_root or application_root / "language_data"
         self.selection_path = application_root / "language_selection.json"
         self.preferences_path = application_root / "settings.json"
+        self.package_history_path = application_root / "package_history.json"
         self.legacy_state_path = application_root / "app_state.json"
         self.legacy_audio_path = application_root / "last_audio.mp3"
         self.migration_marker_path = application_root / MIGRATION_MARKER_NAME

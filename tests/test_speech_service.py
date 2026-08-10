@@ -25,6 +25,22 @@ class FakeStreamingCommunicate:
         yield {"type": "audio", "data": b"second"}
 
 
+class FlakyCommunicate:
+    calls = 0
+
+    def __init__(self, **_kwargs):
+        pass
+
+    async def save(self, filename):
+        type(self).calls += 1
+        with open(filename, "wb") as output:
+            output.write(b"incomplete")
+        if type(self).calls < 3:
+            raise TimeoutError("temporary timeout")
+        with open(filename, "wb") as output:
+            output.write(b"complete")
+
+
 def test_edge_speech_receives_tts_settings(monkeypatch, tmp_path):
     monkeypatch.setattr("gpt01.services.edge_tts.Communicate", FakeCommunicate)
     output = tmp_path / "speech.mp3"
@@ -65,3 +81,15 @@ def test_edge_speech_streams_audio_and_returns_boundary_duration(monkeypatch, tm
     assert output.read_bytes() == b"firstsecond"
     assert duration_ms == 300
     assert FakeStreamingCommunicate.captured["rate"] == "+5%"
+
+
+def test_edge_speech_retries_timeout_and_removes_incomplete_part(monkeypatch, tmp_path):
+    FlakyCommunicate.calls = 0
+    monkeypatch.setattr("gpt01.services.edge_tts.Communicate", FlakyCommunicate)
+    output = tmp_path / "speech.mp3"
+    provider = EdgeSpeechProvider(timeout=1, retry_delays=(0, 0))
+
+    provider.synthesize("hello", "en-US-GuyNeural", output)
+
+    assert FlakyCommunicate.calls == 3
+    assert output.read_bytes() == b"complete"

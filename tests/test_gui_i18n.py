@@ -31,6 +31,11 @@ def test_gui_defaults_to_english_and_can_be_retranslated_to_russian(tmp_path) ->
 
     assert window.windowTitle() == "VoiceGun"
     assert window.open_button.text() == "Open…"
+    assert window.open_text_action.text() == "Open text…"
+    assert window.batch_translation_action.text() == "Batch translation…"
+    assert window.text_packages_menu.title() == "Text packages"
+    assert window.open_package_action.text() == "Open package…"
+    assert window.package_history_action.text() == "Package history"
     assert window.source_title.text() == "Source text"
     assert window.language_combo.itemText(window.language_combo.findData("Japan")) == (
         "Japanese"
@@ -44,6 +49,11 @@ def test_gui_defaults_to_english_and_can_be_retranslated_to_russian(tmp_path) ->
 
     assert window.windowTitle() == "VoiceGun"
     assert window.open_button.text() == "Открыть…"
+    assert window.open_text_action.text() == "Открыть текст…"
+    assert window.batch_translation_action.text() == "Пакетный перевод…"
+    assert window.text_packages_menu.title() == "Пакеты текста"
+    assert window.open_package_action.text() == "Открыть пакет…"
+    assert window.package_history_action.text() == "История пакетов"
     assert window.source_title.text() == "Исходный текст"
     assert window.language_combo.itemText(window.language_combo.findData("German")) == (
         "Немецкий"

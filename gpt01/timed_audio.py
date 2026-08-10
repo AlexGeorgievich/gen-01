@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import hashlib
 import json
+import shutil
 import tempfile
 from collections.abc import Callable
 from dataclasses import asdict, dataclass
@@ -22,6 +24,12 @@ class TimedLine:
     source: str
     translation: str
     transcription: str
+    source_start: int | None = None
+    source_end: int | None = None
+    translation_start: int | None = None
+    translation_end: int | None = None
+    transcription_start: int | None = None
+    transcription_end: int | None = None
 
     @classmethod
     def from_dict(cls, data: object) -> TimedLine | None:
@@ -42,6 +50,12 @@ class TimedLine:
             source=str(data.get("source", "")),
             translation=str(data.get("translation", "")),
             transcription=str(data.get("transcription", "")),
+            source_start=_optional_int(data.get("source_start")),
+            source_end=_optional_int(data.get("source_end")),
+            translation_start=_optional_int(data.get("translation_start")),
+            translation_end=_optional_int(data.get("translation_end")),
+            transcription_start=_optional_int(data.get("transcription_start")),
+            transcription_end=_optional_int(data.get("transcription_end")),
         )
 
 
@@ -140,6 +154,7 @@ def build_timed_audio_package(
     *,
     speech_text: Callable[[str], str] | None = None,
     progress: ProgressCallback | None = None,
+    resume_root: Path | None = None,
 ) -> TimedAudioPackage:
     if not rows:
         raise ValueError("timed audio requires at least one translated row")
@@ -147,19 +162,52 @@ def build_timed_audio_package(
     timed_lines: list[TimedLine] = []
     cursor_ms = 0
     audio_path.parent.mkdir(parents=True, exist_ok=True)
+    job_directory: Path | None = None
+    checkpoint_path: Path | None = None
+    completed: dict[str, int] = {}
+    if resume_root is not None:
+        fingerprint = timed_audio_fingerprint(rows, language, voice, settings, prepare_speech)
+        job_directory = resume_root / fingerprint
+        job_directory.mkdir(parents=True, exist_ok=True)
+        checkpoint_path = job_directory / "checkpoint.json"
+        completed = _load_checkpoint(checkpoint_path, fingerprint)
     try:
-        with tempfile.TemporaryDirectory(prefix="gpt01_timed_parts_") as directory:
-            part_root = Path(directory)
+        temporary_directory = None
+        if job_directory is None:
+            temporary_directory = tempfile.TemporaryDirectory(
+                prefix="gpt01_timed_parts_"
+            )
+            part_root = Path(temporary_directory.name)
+        else:
+            part_root = job_directory
+        try:
             with audio_path.open("wb") as combined_audio:
                 for current, row in enumerate(rows, start=1):
                     part = part_root / f"{current:06d}.mp3"
-                    duration_ms = synthesize(prepare_speech(row.translation), part)
+                    part_key = str(current)
+                    duration_ms = completed.get(part_key, 0)
+                    if duration_ms <= 0 or not part.is_file() or part.stat().st_size == 0:
+                        part.unlink(missing_ok=True)
+                        duration_ms = synthesize(prepare_speech(row.translation), part)
+                        if not part.is_file() or part.stat().st_size == 0:
+                            raise OSError(f"TTS did not create audio part {current}")
+                        if checkpoint_path is not None:
+                            completed[part_key] = duration_ms
+                            _save_checkpoint(
+                                checkpoint_path,
+                                fingerprint,
+                                completed,
+                                len(rows),
+                            )
                     combined_audio.write(part.read_bytes())
                     timed_line = timed_line_from_row(row, cursor_ms, duration_ms)
                     timed_lines.append(timed_line)
                     cursor_ms = timed_line.end_ms
                     if progress:
                         progress(current, len(rows))
+        finally:
+            if temporary_directory is not None:
+                temporary_directory.cleanup()
         manifest = TimedAudioManifest.create(
             language,
             voice,
@@ -168,12 +216,86 @@ def build_timed_audio_package(
         )
         save_manifest(manifest_path, manifest)
         save_srt(srt_path, manifest)
+        if job_directory is not None:
+            shutil.rmtree(job_directory, ignore_errors=True)
         return TimedAudioPackage(audio_path, manifest_path, srt_path, manifest)
     except Exception:
         audio_path.unlink(missing_ok=True)
         manifest_path.unlink(missing_ok=True)
         srt_path.unlink(missing_ok=True)
         raise
+
+
+def timed_audio_fingerprint(
+    rows: list[TranslationRow],
+    language: str,
+    voice: str,
+    settings: TtsSettings,
+    speech_text: Callable[[str], str] | None = None,
+) -> str:
+    prepare_speech = speech_text or (lambda text: text)
+    payload = {
+        "version": 1,
+        "language": language,
+        "voice": voice,
+        "rate": settings.rate,
+        "pitch": settings.pitch,
+        "volume": settings.volume,
+        "rows": [
+            {
+                "line": row.index,
+                "source": row.source,
+                "translation": row.translation,
+                "speech": prepare_speech(row.translation),
+                "transcription": row.transcription,
+            }
+            for row in rows
+        ],
+    }
+    encoded = json.dumps(
+        payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+    ).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def _load_checkpoint(path: Path, fingerprint: str) -> dict[str, int]:
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        if data.get("version") != 1 or data.get("fingerprint") != fingerprint:
+            return {}
+        completed = data.get("completed", {})
+        if not isinstance(completed, dict):
+            return {}
+        return {
+            str(key): int(value)
+            for key, value in completed.items()
+            if int(value) > 0
+        }
+    except (OSError, ValueError, TypeError, AttributeError):
+        return {}
+
+
+def _save_checkpoint(
+    path: Path,
+    fingerprint: str,
+    completed: dict[str, int],
+    total: int,
+) -> None:
+    temporary = path.with_suffix(".tmp")
+    temporary.write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "fingerprint": fingerprint,
+                "total": total,
+                "completed": completed,
+            },
+            ensure_ascii=False,
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+    temporary.replace(path)
 
 
 def save_manifest(path: Path, manifest: TimedAudioManifest) -> None:
@@ -241,4 +363,19 @@ def timed_line_from_row(
         source=row.source,
         translation=row.translation,
         transcription=row.transcription,
+        source_start=row.source_start,
+        source_end=row.source_end,
+        translation_start=row.translation_start,
+        translation_end=row.translation_end,
+        transcription_start=row.transcription_start,
+        transcription_end=row.transcription_end,
     )
+
+
+def _optional_int(value: object) -> int | None:
+    if value is None:
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None

@@ -1,6 +1,6 @@
 import pytest
 
-from gpt01.errors import OperationCancelled
+from gpt01.errors import NetworkServiceError, OperationCancelled
 from gpt01.rows import build_translation_rows
 from gpt01.structured_translation import sentence_chunks, translate_preserving_layout
 
@@ -84,3 +84,32 @@ def test_translation_honours_cancellation_between_chunks():
         )
 
     assert translator.calls == ["one"]
+
+
+def test_large_group_is_retried_as_smaller_groups_after_remote_rejection():
+    class SizeSensitiveTranslator:
+        def __init__(self):
+            self.calls = []
+
+        def translate(self, text, cancelled=None):
+            self.calls.append(text)
+            if "\n" in text:
+                raise NetworkServiceError("request rejected")
+            return f"translated:{text}"
+
+    translator = SizeSensitiveTranslator()
+
+    result = translate_preserving_layout("one\ntwo\nthree\nfour", translator)
+
+    assert result.text == (
+        "translated:one\ntranslated:two\ntranslated:three\ntranslated:four"
+    )
+    assert translator.calls == [
+        "one\ntwo\nthree\nfour",
+        "one\ntwo",
+        "one",
+        "two",
+        "three\nfour",
+        "three",
+        "four",
+    ]

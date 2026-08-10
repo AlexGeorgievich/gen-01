@@ -9,7 +9,7 @@ from PySide6.QtTest import QTest  # noqa: E402
 from PySide6.QtWidgets import QApplication  # noqa: E402
 
 from app import MainWindow  # noqa: E402
-from gpt01.models import TranslationRow  # noqa: E402
+from gpt01.rows import build_sentence_translation_rows  # noqa: E402
 from gpt01.session import SessionRepository  # noqa: E402
 from gpt01.timed_audio import (  # noqa: E402
     TimedAudioManifest,
@@ -81,10 +81,13 @@ def test_markers_select_reversed_inclusive_range_and_enable_space_repeat(
     window._play_next_sequence_line = generations.append
     window.play_ab_range()
 
-    assert window.sequence.rows == [
-        TranslationRow(1, "one", "1", "1"),
-        TranslationRow(3, "three", "3", "3"),
-        TranslationRow(4, "four", "4", "4"),
+    assert [
+        (row.index, row.source, row.translation, row.transcription)
+        for row in window.sequence.rows
+    ] == [
+        (1, "one", "1", "1"),
+        (3, "three", "3", "3"),
+        (4, "four", "4", "4"),
     ]
     assert window._sequence_scope == "ab"
     assert generations == [window.sequence.generation]
@@ -104,6 +107,144 @@ def test_markers_select_reversed_inclusive_range_and_enable_space_repeat(
     assert not window.ab_repeat_shortcut.isEnabled()
     window._stop_sequence()
 
+    window._dirty = False
+    window.close()
+
+
+def test_main_ab_range_plays_each_sentence_inside_selected_lines(qapp, tmp_path):
+    window = MainWindow(SessionRepository(tmp_path))
+    window.source_edit.setPlainText("First. Second.\nOutside.")
+    window.translation_edit.setPlainText("Первое. Второе.\nСнаружи.")
+    window._range_a_line = 0
+    window._range_b_line = 0
+    generations = []
+    window._play_next_sequence_line = generations.append
+
+    window.play_ab_range()
+
+    assert [row.source for row in window.sequence.rows] == ["First.", "Second."]
+    assert [row.translation for row in window.sequence.rows] == [
+        "Первое.",
+        "Второе.",
+    ]
+    assert [row.index for row in window.sequence.rows] == [0, 0]
+    assert generations == [window.sequence.generation]
+
+    window._stop_sequence()
+    window._dirty = False
+    window.close()
+
+
+def test_markers_select_distinct_sentences_inside_one_realistic_paragraph(
+    qapp, tmp_path
+):
+    window = MainWindow(SessionRepository(tmp_path))
+    source = (
+        "Заголовок\n\n"
+        "Первое предложение. Второе предложение. Третье предложение. "
+        "Четвёртое предложение. Пятое предложение.\n\nПодпись"
+    )
+    translation = (
+        "Title\n\nFirst sentence. Second sentence. Third sentence. "
+        "Fourth sentence. Fifth sentence.\n\nSignature"
+    )
+    window.source_edit.setPlainText(source)
+    window.translation_edit.setPlainText(translation)
+    cursor = window.source_edit.textCursor()
+    cursor.setPosition(source.index("Второе") + 2)
+    window.source_edit.setTextCursor(cursor)
+    window.set_range_marker_a()
+    cursor.setPosition(source.index("Четвёртое") + 2)
+    window.source_edit.setTextCursor(cursor)
+    window.set_range_marker_b()
+
+    assert window._range_a_line == window._range_b_line == 2
+    assert window._range_a_span != window._range_b_span
+    assert window.mark_a_button.text() == "A:S3"
+    assert window.mark_b_button.text() == "B:S5"
+    assert {
+        selection.cursor.selectedText()
+        for selection in window.source_edit.extraSelections()
+        if selection.cursor.hasSelection()
+    } == {"Второе предложение.", "Четвёртое предложение."}
+
+    generations = []
+    window._play_next_sequence_line = generations.append
+    window.play_ab_range()
+
+    assert [row.source for row in window.sequence.rows] == [
+        "Второе предложение.",
+        "Третье предложение.",
+        "Четвёртое предложение.",
+    ]
+    assert [row.translation for row in window.sequence.rows] == [
+        "Second sentence.",
+        "Third sentence.",
+        "Fourth sentence.",
+    ]
+    assert generations == [window.sequence.generation]
+
+    window._stop_sequence()
+    window._dirty = False
+    window.close()
+
+
+def test_timed_ab_uses_sentence_boundaries_inside_same_line(qapp, tmp_path):
+    window = MainWindow(SessionRepository(tmp_path))
+    source = "First. Second. Third. Fourth. Fifth."
+    translation = "Un. Deux. Trois. Quatre. Cinq."
+    window.source_edit.setPlainText(source)
+    window.translation_edit.setPlainText(translation)
+    rows = build_sentence_translation_rows(source, translation)
+    lines = [
+        TimedLine(
+            row.index,
+            index * 1000,
+            (index + 1) * 1000,
+            row.source,
+            row.translation,
+            row.transcription,
+            row.source_start,
+            row.source_end,
+            row.translation_start,
+            row.translation_end,
+        )
+        for index, row in enumerate(rows)
+    ]
+    install_timed_package(window, tmp_path, lines)
+    cursor = window.source_edit.textCursor()
+    cursor.setPosition(source.index("Second") + 2)
+    window.source_edit.setTextCursor(cursor)
+    window.set_range_marker_a()
+    cursor.setPosition(source.index("Fourth") + 2)
+    window.source_edit.setTextCursor(cursor)
+    window.set_range_marker_b()
+    started = []
+    window._start_timed_playback = lambda start, stop, scope: started.append(
+        (start, stop, scope)
+    )
+
+    window.play_ab_range()
+
+    assert started == [(1000, 4000, "ab")]
+    window._reset_audio_state()
+    window._dirty = False
+    window.close()
+
+
+def test_speak_and_replay_respect_active_ab_markers(qapp, tmp_path):
+    window = MainWindow(SessionRepository(tmp_path))
+    window.source_edit.setPlainText("zero\none\ntwo")
+    window.translation_edit.setPlainText("0\n1\n2")
+    window._range_a_line = 1
+    window._range_b_line = 2
+    started = []
+    window._start_ab_sequence = lambda: started.append("ab")
+
+    window.speak_text()
+    window.replay_audio()
+
+    assert started == ["ab", "ab"]
     window._dirty = False
     window.close()
 
@@ -308,6 +449,64 @@ def test_speak_uses_prepared_timestamps_for_synchronized_highlight(qapp, tmp_pat
     assert not window._timed_playback_active
     assert window.save_audio_button.isEnabled()
 
+    window._reset_audio_state()
+    window._dirty = False
+    window.close()
+
+
+def test_sequence_and_highlight_use_sentences_inside_a_single_line(qapp, tmp_path):
+    window = MainWindow(SessionRepository(tmp_path))
+    window.source_edit.setPlainText("One. Two.")
+    window.translation_edit.setPlainText("Un. Deux.")
+    window.transcription_edit.setPlainText("Un. Deux.")
+    generations = []
+    window._play_next_sequence_line = generations.append
+
+    window._start_sequence()
+
+    assert [row.source for row in window.sequence.rows] == ["One.", "Two."]
+    assert [row.translation for row in window.sequence.rows] == ["Un.", "Deux."]
+    assert generations == [window.sequence.generation]
+
+    window._show_synchronized_row(window.sequence.rows[1])
+    assert window.source_edit.extraSelections()[-1].cursor.selectedText() == "Two."
+    assert window.translation_edit.extraSelections()[0].cursor.selectedText() == "Deux."
+    assert window.transcription_edit.extraSelections()[0].cursor.selectedText() == "Deux."
+
+    window._stop_sequence()
+    window._dirty = False
+    window.close()
+
+
+def test_timed_playback_moves_between_sentence_spans_on_same_line(qapp, tmp_path):
+    window = MainWindow(SessionRepository(tmp_path))
+    window.source_edit.setPlainText("One. Two.")
+    window.translation_edit.setPlainText("Un. Deux.")
+    rows = build_sentence_translation_rows("One. Two.", "Un. Deux.")
+    lines = [
+        TimedLine(
+            row.index,
+            index * 1000,
+            (index + 1) * 1000,
+            row.source,
+            row.translation,
+            row.transcription,
+            row.source_start,
+            row.source_end,
+            row.translation_start,
+            row.translation_end,
+        )
+        for index, row in enumerate(rows)
+    ]
+    install_timed_package(window, tmp_path, lines)
+
+    window.speak_text()
+    window._timed_position_changed(1500)
+
+    assert window.source_edit.extraSelections()[-1].cursor.selectedText() == "Two."
+    assert window.translation_edit.extraSelections()[0].cursor.selectedText() == "Deux."
+
+    window.stop_audio()
     window._reset_audio_state()
     window._dirty = False
     window.close()

@@ -6,10 +6,11 @@ import pytest  # noqa: E402
 from PySide6.QtCore import Qt  # noqa: E402
 from PySide6.QtMultimedia import QMediaPlayer  # noqa: E402
 from PySide6.QtTest import QTest  # noqa: E402
-from PySide6.QtWidgets import QApplication, QDialog  # noqa: E402
+from PySide6.QtWidgets import QApplication, QDialog, QLabel  # noqa: E402
 
 from app import MainWindow  # noqa: E402
 from gpt01.cards import CardField, FlashcardsDialog  # noqa: E402
+from gpt01.rows import build_sentence_translation_rows  # noqa: E402
 from gpt01.session import SessionRepository  # noqa: E402
 from gpt01.timed_audio import (  # noqa: E402
     TimedAudioManifest,
@@ -116,8 +117,10 @@ def test_cards_use_only_ab_range_and_start_at_source_caret(
     spoken = []
     cycles = []
     captured = {}
-    window._play_card_line = spoken.append
-    window._play_card_range_cycle = lambda: cycles.append(True)
+    window._play_card_row = lambda row: spoken.append(row.index)
+    window._play_card_range_cycle = lambda rows=None: cycles.append(
+        [(row.index, row.source) for row in rows or []]
+    )
 
     def inspect_cards(dialog: FlashcardsDialog) -> QDialog.DialogCode:
         captured["lines"] = list(dialog._line_numbers)
@@ -125,8 +128,9 @@ def test_cards_use_only_ab_range_and_start_at_source_caret(
         captured["badge"] = dialog.mode_badge.text()
         captured["hint"] = dialog.hint_label.text()
         captured["main_space_disabled"] = not window.ab_repeat_shortcut.isEnabled()
-        window._show_synchronized_line(3)
-        captured["synchronized"] = dialog.current_line
+        captured["initial_fields"] = [
+            field.text for field in dialog.current_fields()[:2]
+        ]
         dialog.next_card()
         dialog.next_card()
         dialog.repeat_card()
@@ -136,16 +140,143 @@ def test_cards_use_only_ab_range_and_start_at_source_caret(
     window.open_cards()
 
     assert captured == {
-        "lines": [1, 2, 3],
-        "initial": 2,
-        "synchronized": 3,
+        "lines": [0, 1, 2],
+        "initial": 1,
+        "initial_fields": ["two", "2"],
         "badge": "A–B · lines 2–4",
-        "hint": "← → or < > — navigate and speak   •   Space — play one A–B cycle",
+        "hint": (
+            "← → or < > — navigate and speak   •   Space — play one A–B cycle"
+            "   •   ↑ — show supporting text · ↓ — hide supporting text"
+        ),
         "main_space_disabled": True,
     }
-    assert spoken == [1, 2]
-    assert cycles == [True]
+    assert spoken == [3, 1]
+    assert cycles == [[(1, "one"), (2, "two"), (3, "three")]]
     assert window.ab_repeat_shortcut.isEnabled()
+    window._dirty = False
+    window.close()
+
+
+def test_opening_ab_cards_immediately_splits_long_line_into_sentences(
+    qapp, tmp_path, monkeypatch
+):
+    window = MainWindow(SessionRepository(tmp_path))
+    window.source_edit.setPlainText("First. Second. Third.")
+    window.translation_edit.setPlainText("Первое. Второе. Третье.")
+    window._range_a_line = 0
+    window._range_b_line = 0
+    captured = {}
+
+    def inspect_cards(dialog: FlashcardsDialog) -> QDialog.DialogCode:
+        captured["cards"] = list(dialog._line_numbers)
+        captured["fields"] = [field.text for field in dialog.current_fields()[:2]]
+        captured["position"] = dialog.position_label.text()
+        return QDialog.DialogCode.Accepted
+
+    monkeypatch.setattr(FlashcardsDialog, "exec", inspect_cards)
+    window.open_cards()
+
+    assert captured == {
+        "cards": [0, 1, 2],
+        "fields": ["First.", "Первое."],
+        "position": "1 / 3",
+    }
+    window._dirty = False
+    window.close()
+
+
+def test_cards_without_ab_also_open_and_navigate_by_sentence(
+    qapp, tmp_path, monkeypatch
+):
+    window = MainWindow(SessionRepository(tmp_path))
+    window.source_edit.setPlainText("First. Second. Third.")
+    window.translation_edit.setPlainText("Первое. Второе. Третье.")
+    spoken = []
+    captured = {}
+    window._play_card_row = lambda row: spoken.append(row.source)
+
+    def inspect_cards(dialog: FlashcardsDialog) -> QDialog.DialogCode:
+        captured["cards"] = list(dialog._line_numbers)
+        captured["fields"] = [field.text for field in dialog.current_fields()[:2]]
+        captured["position"] = dialog.position_label.text()
+        dialog.next_card()
+        return QDialog.DialogCode.Accepted
+
+    monkeypatch.setattr(FlashcardsDialog, "exec", inspect_cards)
+    window.open_cards()
+
+    assert captured == {
+        "cards": [0, 1, 2],
+        "fields": ["First.", "Первое."],
+        "position": "1 / 3",
+    }
+    assert spoken == ["Second."]
+    window._dirty = False
+    window.close()
+
+
+def test_open_cards_ab_space_uses_frozen_range_only(qapp, tmp_path, monkeypatch):
+    window = MainWindow(SessionRepository(tmp_path))
+    window.source_edit.setPlainText("Outside zero.\nFirst. Second.\nThird.\nOutside four.")
+    window.translation_edit.setPlainText("0.\nПервое. Второе.\nТретье.\n4.")
+    window._range_a_line = 1
+    window._range_b_line = 2
+    captured = []
+
+    def capture_cycle(rows=None):
+        captured.append([(row.index, row.source) for row in rows or []])
+
+    window._play_card_range_cycle = capture_cycle
+
+    def inspect_cards(dialog: FlashcardsDialog) -> QDialog.DialogCode:
+        dialog.repeat_card()
+        return QDialog.DialogCode.Accepted
+
+    monkeypatch.setattr(FlashcardsDialog, "exec", inspect_cards)
+    window.open_cards()
+
+    assert captured == [[(1, "First."), (1, "Second."), (2, "Third.")]]
+    window._dirty = False
+    window.close()
+
+
+def test_cards_ab_respect_sentence_markers_inside_one_paragraph(
+    qapp, tmp_path, monkeypatch
+):
+    window = MainWindow(SessionRepository(tmp_path))
+    source = "First. Second. Third. Fourth. Fifth."
+    window.source_edit.setPlainText(source)
+    window.translation_edit.setPlainText("Un. Deux. Trois. Quatre. Cinq.")
+    cursor = window.source_edit.textCursor()
+    cursor.setPosition(source.index("Second") + 1)
+    window.source_edit.setTextCursor(cursor)
+    window.set_range_marker_a()
+    cursor.setPosition(source.index("Fourth") + 1)
+    window.source_edit.setTextCursor(cursor)
+    window.set_range_marker_b()
+    captured = {}
+
+    def capture_cycle(rows=None):
+        captured["cycle"] = [row.source for row in rows or []]
+
+    window._play_card_range_cycle = capture_cycle
+
+    def inspect_cards(dialog: FlashcardsDialog) -> QDialog.DialogCode:
+        captured["count"] = len(dialog._line_numbers)
+        captured["first"] = dialog.current_fields()[0].text
+        captured["badge"] = dialog.mode_badge.text()
+        dialog.repeat_card()
+        return QDialog.DialogCode.Accepted
+
+    monkeypatch.setattr(FlashcardsDialog, "exec", inspect_cards)
+    window.open_cards()
+
+    assert captured == {
+        "count": 3,
+        "first": "Fourth.",
+        "badge": "A–B · sentences 2–4",
+        "cycle": ["Second.", "Third.", "Fourth."],
+    }
     window._dirty = False
     window.close()
 
@@ -171,6 +302,43 @@ def test_flashcard_keyboard_navigation_and_repeat(qapp):
     assert spoken == [4, 4, 2, 4, 4]
     assert dialog.current_line == 4
     assert dialog.progress_bar.value() == 2
+    dialog.close()
+
+
+def test_up_and_down_toggle_supporting_card_fields_without_affecting_primary(qapp):
+    dialog = FlashcardsDialog(
+        [0],
+        0,
+        lambda _line: [
+            CardField("Translation", "Primary", True, "translation"),
+            CardField("Source", "Supporting", False, "source"),
+            CardField("Transcription", "Phonetics", False, "transcription"),
+        ],
+        lambda _line: None,
+        title="Cards",
+        close_text="Close",
+        visibility_hint="↑ show · ↓ hide",
+    )
+    dialog.show()
+
+    QTest.keyClick(dialog, Qt.Key.Key_Down)
+    assert not dialog.secondary_fields_visible
+    visible_values = [
+        label.text()
+        for label in dialog.card_container.findChildren(QLabel, "cardValue")
+        if not label.isHidden()
+    ]
+    assert visible_values == ["Primary"]
+
+    QTest.keyClick(dialog, Qt.Key.Key_Up)
+    assert dialog.secondary_fields_visible
+    visible_values = [
+        label.text()
+        for label in dialog.card_container.findChildren(QLabel, "cardValue")
+        if not label.isHidden()
+    ]
+    assert visible_values == ["Primary", "Supporting", "Phonetics"]
+    assert "↑ show · ↓ hide" in dialog.hint_label.text()
     dialog.close()
 
 
@@ -315,5 +483,112 @@ def test_fast_card_space_plays_one_ab_cycle_and_waits_for_completion(qapp, tmp_p
 
     assert started == [([0, 1, 2], "cards_range"), ([0, 1, 2], "cards_range")]
     window.sequence.active = False
+    window._dirty = False
+    window.close()
+
+
+def test_card_ab_cycle_displays_each_sentence_even_on_the_same_line(qapp, tmp_path):
+    window = MainWindow(SessionRepository(tmp_path))
+    window.source_edit.setPlainText("First. Second.\nThird.")
+    window.translation_edit.setPlainText("Первое. Второе.\nТретье.")
+    window._range_a_line = 0
+    window._range_b_line = 1
+    rows = window._card_playback_rows()
+    dialog = FlashcardsDialog(
+        [0, 1],
+        0,
+        window._card_fields,
+        lambda _line: None,
+        title="Cards",
+        close_text="Close",
+        cycle_navigation=True,
+    )
+    window._active_cards_dialog = dialog
+    window._sequence_scope = "cards_range"
+    window.sequence.start(rows)
+
+    window._show_synchronized_row(rows[0])
+    first = [field.text for field in dialog.current_fields()]
+    window.sequence.advance()
+    window._show_synchronized_row(rows[1])
+    second = [field.text for field in dialog.current_fields()]
+
+    assert first[:2] == ["First.", "Первое."]
+    assert second[:2] == ["Second.", "Второе."]
+    assert dialog.current_line == 0
+    assert dialog.position_label.text() == "2 / 3"
+
+    window.sequence.stop()
+    window._sequence_scope = None
+    window._active_cards_dialog = None
+    dialog.close()
+    window._dirty = False
+    window.close()
+
+
+def test_timed_card_ab_cycle_updates_sentences_on_same_line(qapp, tmp_path):
+    window = MainWindow(SessionRepository(tmp_path))
+    source = "First. Second."
+    translation = "Первое. Второе."
+    window.source_edit.setPlainText(source)
+    window.translation_edit.setPlainText(translation)
+    rows = build_sentence_translation_rows(source, translation)
+    timed_lines = [
+        TimedLine(
+            row.index,
+            index * 1000,
+            (index + 1) * 1000,
+            row.source,
+            row.translation,
+            row.transcription,
+            row.source_start,
+            row.source_end,
+            row.translation_start,
+            row.translation_end,
+        )
+        for index, row in enumerate(rows)
+    ]
+    audio = tmp_path / "sentences.mp3"
+    manifest_path = tmp_path / "sentences.json"
+    srt_path = tmp_path / "sentences.srt"
+    audio.write_bytes(b"audio")
+    manifest = TimedAudioManifest.create(
+        window.current_language.key,
+        window.selected_voice(),
+        window.tts_settings,
+        timed_lines,
+    )
+    save_manifest(manifest_path, manifest)
+    save_srt(srt_path, manifest)
+    window.audio_path = audio
+    window.audio_manifest_path = manifest_path
+    window.audio_srt_path = srt_path
+    window.timed_manifest = manifest
+    dialog = FlashcardsDialog(
+        [0],
+        0,
+        window._card_fields,
+        lambda _line: None,
+        title="Cards",
+        close_text="Close",
+        cycle_navigation=True,
+    )
+    window._active_cards_dialog = dialog
+    window._timed_playback_active = True
+    window._timed_playback_scope = "cards_range"
+
+    window._timed_position_changed(0)
+    first = [field.text for field in dialog.current_fields()]
+    window._timed_position_changed(1500)
+    second = [field.text for field in dialog.current_fields()]
+
+    assert first[:2] == ["First.", "Первое."]
+    assert second[:2] == ["Second.", "Второе."]
+    assert dialog.position_label.text() == "2 / 2"
+
+    window._timed_playback_active = False
+    window._active_cards_dialog = None
+    dialog.close()
+    window._reset_audio_state()
     window._dirty = False
     window.close()

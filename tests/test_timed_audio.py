@@ -1,4 +1,7 @@
+import pytest
+
 from gpt01.models import TranslationRow
+from gpt01.rows import build_sentence_translation_rows
 from gpt01.timed_audio import (
     TimedAudioManifest,
     build_timed_audio_package,
@@ -94,3 +97,85 @@ def test_build_package_concatenates_rows_and_writes_matching_json_srt(tmp_path):
         encoding="utf-8"
     )
     assert progress == [(1, 2), (2, 2)]
+
+
+def test_package_uses_sentence_rows_and_persists_highlight_ranges(tmp_path):
+    rows = build_sentence_translation_rows("One. Two.", "Un. Deux.")
+    audio = tmp_path / "sentences.mp3"
+    manifest_path = tmp_path / "sentences.json"
+    srt_path = tmp_path / "sentences.srt"
+
+    package = build_timed_audio_package(
+        rows,
+        audio,
+        manifest_path,
+        srt_path,
+        "French",
+        "voice",
+        TtsSettings(),
+        lambda text, output: (output.write_bytes(text.encode()), 500)[1],
+    )
+
+    assert [line.translation for line in package.manifest.lines] == ["Un.", "Deux."]
+    assert [line.line for line in package.manifest.lines] == [0, 0]
+    assert package.manifest.lines[1].source_start == 5
+    assert package.manifest.lines[1].translation_start == 4
+    assert render_srt(package.manifest).count(" --> ") == 2
+
+
+def test_failed_package_resumes_from_persisted_audio_parts(tmp_path):
+    rows = [
+        TranslationRow(0, "one", "un", "un"),
+        TranslationRow(1, "two", "deux", "dø"),
+        TranslationRow(2, "three", "trois", "tʁwa"),
+    ]
+    audio = tmp_path / "lesson.mp3"
+    manifest_path = tmp_path / "lesson.json"
+    srt_path = tmp_path / "lesson.srt"
+    resume_root = tmp_path / "tts_jobs"
+    first_calls = []
+
+    def interrupted_synthesis(text, output):
+        first_calls.append(text)
+        if text == "deux":
+            raise TimeoutError("network interruption")
+        output.write_bytes(text.encode())
+        return 500
+
+    with pytest.raises(TimeoutError):
+        build_timed_audio_package(
+            rows,
+            audio,
+            manifest_path,
+            srt_path,
+            "French",
+            "voice",
+            TtsSettings(),
+            interrupted_synthesis,
+            resume_root=resume_root,
+        )
+
+    assert first_calls == ["un", "deux"]
+    assert list(resume_root.rglob("checkpoint.json"))
+    resumed_calls = []
+
+    def resumed_synthesis(text, output):
+        resumed_calls.append(text)
+        output.write_bytes(text.encode())
+        return 500
+
+    package = build_timed_audio_package(
+        rows,
+        audio,
+        manifest_path,
+        srt_path,
+        "French",
+        "voice",
+        TtsSettings(),
+        resumed_synthesis,
+        resume_root=resume_root,
+    )
+
+    assert resumed_calls == ["deux", "trois"]
+    assert package.audio_path.read_bytes() == b"undeuxtrois"
+    assert not list(resume_root.rglob("checkpoint.json"))

@@ -6,8 +6,16 @@ import pytest  # noqa: E402
 from PySide6.QtWidgets import QApplication  # noqa: E402
 
 from app import MainWindow  # noqa: E402
+from gpt01.models import Document, TranslationRow  # noqa: E402
+from gpt01.packages import load_package_history, save_package_document  # noqa: E402
 from gpt01.preferences import AudioPreparationMode  # noqa: E402
 from gpt01.session import SessionRepository  # noqa: E402
+from gpt01.timed_audio import (  # noqa: E402
+    TimedAudioManifest,
+    save_manifest,
+    timed_line_from_row,
+)
+from gpt01.tts import TtsSettings  # noqa: E402
 
 
 @pytest.fixture(scope="module")
@@ -79,6 +87,48 @@ def test_fast_mode_translates_without_waiting_for_audio(qapp, tmp_path):
     window._start_sequence = lambda: started.append(True)
     window.speak_text()
     assert started == [True]
+
+    window._dirty = False
+    window.close()
+
+
+def test_open_offline_package_restores_document_audio_and_history(
+    qapp, tmp_path, monkeypatch
+):
+    repository = SessionRepository(tmp_path)
+    language_directory = repository.data_root / "English"
+    language_directory.mkdir(parents=True)
+    audio = language_directory / "lesson_en.mp3"
+    document = Document("one\ntwo", "one\ntwo", "/wʌn/\n/tuː/")
+    rows = [
+        TranslationRow(0, "one", "one", "/wʌn/"),
+        TranslationRow(1, "two", "two", "/tuː/"),
+    ]
+    manifest = TimedAudioManifest.create(
+        "English",
+        "en-US-GuyNeural",
+        TtsSettings(rate=10),
+        [
+            timed_line_from_row(rows[0], 0, 500),
+            timed_line_from_row(rows[1], 500, 500),
+        ],
+    )
+    audio.write_bytes(b"audio")
+    save_manifest(audio.with_suffix(".json"), manifest)
+    audio.with_suffix(".srt").write_text("subtitles", encoding="utf-8")
+    save_package_document(audio, "English", document)
+    window = MainWindow(repository)
+    monkeypatch.setattr(window.player, "setSource", lambda _source: None)
+
+    assert window._open_offline_package(audio, "English")
+    assert window.current_language.key == "English"
+    assert window.source_edit.toPlainText() == "one\ntwo"
+    assert window.translation_edit.toPlainText() == "one\ntwo"
+    assert window.transcription_edit.toPlainText() == "/wʌn/\n/tuː/"
+    assert window.audio_path == audio
+    assert window.timed_manifest == manifest
+    assert window._timed_audio_ready()
+    assert load_package_history(repository.package_history_path)[0].name == "lesson_en"
 
     window._dirty = False
     window.close()

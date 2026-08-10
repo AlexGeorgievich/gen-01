@@ -5,7 +5,7 @@ import re
 import time
 from collections.abc import Callable
 from pathlib import Path
-from typing import Protocol
+from typing import Protocol, TypeVar
 
 import edge_tts
 from deep_translator import GoogleTranslator
@@ -109,9 +109,17 @@ class GoogleTranslationProvider:
             time.sleep(min(0.05, max(0.0, deadline - time.monotonic())))
 
 
+_SynthesisResult = TypeVar("_SynthesisResult")
+
+
 class EdgeSpeechProvider:
-    def __init__(self, timeout: int = 90) -> None:
+    def __init__(
+        self,
+        timeout: int = 90,
+        retry_delays: tuple[float, ...] = (2.0, 5.0),
+    ) -> None:
         self.timeout = timeout
+        self.retry_delays = retry_delays
 
     def synthesize(
         self,
@@ -134,19 +142,7 @@ class EdgeSpeechProvider:
                 timeout=self.timeout,
             )
 
-        try:
-            if cancelled and cancelled():
-                raise OperationCancelled("Синтез речи отменён.")
-            asyncio.run(run())
-            if cancelled and cancelled():
-                output.unlink(missing_ok=True)
-                raise OperationCancelled("Синтез речи отменён.")
-        except OperationCancelled:
-            output.unlink(missing_ok=True)
-            raise
-        except Exception as exc:
-            output.unlink(missing_ok=True)
-            raise NetworkServiceError(f"Сервис синтеза речи недоступен: {exc}") from exc
+        self._run_with_retry(lambda: asyncio.run(run()), output, cancelled)
 
     def synthesize_timed(
         self,
@@ -180,17 +176,38 @@ class EdgeSpeechProvider:
                 return max(1, (last_boundary_end + 9_999) // 10_000)
             return max(1, len(text.split()) * 400)
 
-        try:
-            if cancelled and cancelled():
-                raise OperationCancelled("Синтез речи отменён.")
-            duration_ms = asyncio.run(run())
+        return self._run_with_retry(lambda: asyncio.run(run()), output, cancelled)
+
+    def _run_with_retry(
+        self,
+        operation: Callable[[], _SynthesisResult],
+        output: Path,
+        cancelled: Callable[[], bool] | None,
+    ) -> _SynthesisResult:
+        attempts = len(self.retry_delays) + 1
+        last_error: Exception | None = None
+        for attempt in range(attempts):
             if cancelled and cancelled():
                 output.unlink(missing_ok=True)
                 raise OperationCancelled("Синтез речи отменён.")
-            return duration_ms
-        except OperationCancelled:
             output.unlink(missing_ok=True)
-            raise
-        except Exception as exc:
-            output.unlink(missing_ok=True)
-            raise NetworkServiceError(f"Сервис синтеза речи недоступен: {exc}") from exc
+            try:
+                result = operation()
+                if cancelled and cancelled():
+                    output.unlink(missing_ok=True)
+                    raise OperationCancelled("Синтез речи отменён.")
+                return result
+            except OperationCancelled:
+                output.unlink(missing_ok=True)
+                raise
+            except Exception as exc:
+                last_error = exc
+                output.unlink(missing_ok=True)
+                if attempt >= len(self.retry_delays):
+                    break
+                GoogleTranslationProvider._cooperative_wait(
+                    self.retry_delays[attempt], cancelled
+                )
+        raise NetworkServiceError(
+            f"Сервис синтеза речи не ответил после {attempts} попыток: {last_error}"
+        ) from last_error

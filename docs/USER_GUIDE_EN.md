@@ -29,6 +29,14 @@ translation, Microsoft Edge TTS and refreshing the voice list.
 - **Translation** — translated text for the selected target language.
 - **Transcription** — IPA, Romaji or Pinyin aligned with the translation.
 
+Use **Open package** for offline work. Select a language and then a package from
+its `language_data\<Language>` directory. VoiceGun validates the TXT,
+document.json, MP3, timestamp JSON and SRT files, then restores all three text
+panels and synchronized audio. Playback, cards and A–B work without internet.
+
+**Package history** lists up to 10 recently saved or opened packages. Double-click
+an entry to open it. Removing or clearing history never deletes package files.
+
 Use **Clear** in a column header to clear that column. Use the `−` button in the
 Source, Translation or Transcription header to hide the column. Its restore
 button remains available above the workspace. VoiceGun always keeps at least
@@ -42,25 +50,26 @@ each target language.
 
 ## Learning cards
 
-Select **Cards** to open the current synchronized line in a large modal learning
+Select **Cards** to open the current synchronized sentence in a large modal learning
 view. In the normal order Source appears first; after switching windows the
 translated learning side appears first. Only columns that are currently open in
 the main workspace are included; when one panel is active, the card contains
-only that panel's synchronized line. Colors match the Source, Translation and
+only that panel's synchronized sentence. Colors match the Source, Translation and
 Transcription panels in the main window. The header shows the active range, and
 the progress bar shows the current position.
 
-- `Right Arrow` or `>` — show and speak the next non-empty line;
-- `Left Arrow` or `<` — show and speak the previous line;
+- `Right Arrow` or `>` — show and speak the next sentence;
+- `Left Arrow` or `<` — show and speak the previous sentence;
 - `Space` — repeat the current card, or play one complete A–B cycle when both
   range markers are active;
+- `Down Arrow` — hide supporting texts; `Up Arrow` — restore them;
 - `Esc` or **Close** — stop card playback and return to the workspace.
 
 If A and B are set, Cards is restricted to that inclusive range and navigation
 cycles from the last card to the first and back. `Space` plays all A–B cards
 once; after that cycle finishes, pressing `Space` starts one new cycle. Without
-A–B it repeats only the current line. During an A–B cycle, the modal card text
-and progress change in sync with every spoken line. In complete package mode
+A–B it repeats only the current sentence. During an A–B cycle, the modal card text
+and progress change in sync with every spoken sentence. In complete package mode
 playback seeks by timestamps; in fast mode each card is synthesized once and
 kept in a separate temporary cache.
 
@@ -84,29 +93,31 @@ the audio error is reported separately.
 
 Select a Microsoft TTS voice and use:
 
-- **Speak** — synthesize and play lines immediately in fast mode, or play the
+- **Speak** — synthesize and play sentences immediately in fast mode, or play the
   complete prepared MP3 in package mode; both variants highlight and scroll the
-  corresponding line in all three columns;
+  corresponding sentence in all three columns;
 - **Replay** — repeat the prepared package or the cached line sequence;
 - **Stop** — stop the current playback or foreground operation;
-- `Ctrl+Space` — speak the line at the mouse pointer or source caret.
+- `Ctrl+Space` — speak the sentence at the mouse pointer or source caret.
 
-The corresponding line is highlighted and scrolled into view in all visible
+The corresponding sentence is highlighted and scrolled into view in all visible
 columns.
 
 Outside an A–B selection, **Save MP3** saves the complete translated text as a
-three-file package with the same base name: `.mp3` audio, `.srt` subtitles and
-an internal `.json` line-timing manifest. Stopping playback does not truncate
+five-file offline package with the same base name: `.txt`, `.document.json`,
+`.mp3` audio, `.srt` subtitles and an internal `.json` timing manifest. Stopping
+playback does not truncate
 the saved audio because playback uses the already prepared complete MP3.
 
 When both A and B markers are set, **Save MP3** first offers a choice between
 the marked A–B interval and the complete text. The interval is selected by
-default and its actual source line numbers are shown in the dialog.
+default and its actual source line or sentence numbers are shown in the dialog.
 
 ## A–B learning range
 
-1. Place the text caret on the first source line and select **A**.
-2. Place the caret on the last line and select **B**.
+1. Place the text caret inside the first sentence and select **A**.
+2. Place the caret inside the last sentence and select **B**. Both sentences
+   may be located inside the same physical line.
 3. Select **A–B** to speak the inclusive range.
 4. After completion, press `Space` to replay the same A–B range.
 5. Select **Reset** to stop A–B playback, clear both markers and delete its
@@ -183,9 +194,9 @@ write permission has been granted.
 ## Keyboard shortcuts
 
 - `Ctrl+O` — open a document;
-- `Ctrl+Space` — speak the selected/current line;
+- `Ctrl+Space` — speak the selected/current sentence;
 - `Space` — replay a completed A–B range in the main window; inside Cards it
-  repeats the current line or starts one A–B card cycle;
+  repeats the current sentence or starts one A–B card cycle;
 - `F1` — open this guide.
 
 ## Author

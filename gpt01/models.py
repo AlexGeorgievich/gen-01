@@ -30,3 +30,9 @@ class TranslationRow:
     source: str
     translation: str = ""
     transcription: str = ""
+    source_start: int | None = None
+    source_end: int | None = None
+    translation_start: int | None = None
+    translation_end: int | None = None
+    transcription_start: int | None = None
+    transcription_end: int | None = None

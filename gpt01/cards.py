@@ -42,9 +42,11 @@ class FlashcardsDialog(QDialog):
         mode_text: str = "",
         navigation_hint: str = "",
         space_hint: str = "",
+        visibility_hint: str = "",
         primary_font_size: int = 24,
         secondary_font_size: int = 18,
         cycle_navigation: bool = False,
+        item_ids_are_lines: bool = True,
         parent: QWidget | None = None,
     ) -> None:
         super().__init__(parent)
@@ -66,6 +68,10 @@ class FlashcardsDialog(QDialog):
         self._primary_font_size = primary_font_size
         self._secondary_font_size = secondary_font_size
         self._cycle_navigation = cycle_navigation
+        self._item_ids_are_lines = item_ids_are_lines
+        self._playback_fields: list[CardField] | None = None
+        self._playback_progress: tuple[int, int] | None = None
+        self._secondary_fields_visible = True
 
         self.setStyleSheet(
             "QDialog { background: #edf2f8; }"
@@ -138,7 +144,11 @@ class FlashcardsDialog(QDialog):
         footer_layout = QHBoxLayout(footer)
         footer_layout.setContentsMargins(13, 8, 10, 8)
         self.hint_label = QLabel(
-            "   •   ".join(item for item in (navigation_hint, space_hint) if item)
+            "   •   ".join(
+                item
+                for item in (navigation_hint, space_hint, visibility_hint)
+                if item
+            )
         )
         self.hint_label.setObjectName("cardHint")
         self.hint_label.setWordWrap(True)
@@ -162,13 +172,52 @@ class FlashcardsDialog(QDialog):
 
     def show_line(self, line_number: int) -> None:
         """Display a synchronized line without starting another playback."""
-        if line_number not in self._line_numbers or line_number == self.current_line:
+        if not self._item_ids_are_lines:
             return
+        if line_number not in self._line_numbers:
+            return
+        needs_render = line_number != self.current_line or self._playback_fields is not None
         self._position = self._line_numbers.index(line_number)
+        self._clear_playback_view()
+        if needs_render:
+            self._render()
+
+    def show_playback_fields(
+        self,
+        line_number: int,
+        fields: list[CardField],
+        current: int | None = None,
+        total: int | None = None,
+    ) -> None:
+        """Show one spoken sentence, including another sentence on the same line."""
+        if (
+            current is not None
+            and total == len(self._line_numbers)
+            and 1 <= current <= total
+        ):
+            self._position = current - 1
+        elif self._item_ids_are_lines and line_number in self._line_numbers:
+            self._position = self._line_numbers.index(line_number)
+        self._playback_fields = list(fields)
+        self._playback_progress = (
+            (current, total)
+            if current is not None and total is not None and total > 0
+            else None
+        )
         self._render()
 
     def current_fields(self) -> list[CardField]:
-        return self._fields_for_line(self.current_line)
+        return self._playback_fields or self._fields_for_line(self.current_line)
+
+    @property
+    def secondary_fields_visible(self) -> bool:
+        return self._secondary_fields_visible
+
+    def set_secondary_fields_visible(self, visible: bool) -> None:
+        if self._secondary_fields_visible == visible:
+            return
+        self._secondary_fields_visible = visible
+        self._render()
 
     def previous_card(self) -> None:
         if not self._can_navigate():
@@ -179,6 +228,7 @@ class FlashcardsDialog(QDialog):
             self._position = len(self._line_numbers) - 1
         else:
             self._position -= 1
+        self._clear_playback_view()
         self._render()
         self._speak_line(self.current_line)
 
@@ -191,6 +241,7 @@ class FlashcardsDialog(QDialog):
             self._position = 0
         else:
             self._position += 1
+        self._clear_playback_view()
         self._render()
         self._speak_line(self.current_line)
 
@@ -205,6 +256,8 @@ class FlashcardsDialog(QDialog):
         if event.isAutoRepeat() and event.key() in {
             Qt.Key.Key_Left,
             Qt.Key.Key_Right,
+            Qt.Key.Key_Up,
+            Qt.Key.Key_Down,
             Qt.Key.Key_Space,
         }:
             event.accept()
@@ -217,6 +270,14 @@ class FlashcardsDialog(QDialog):
             self.next_card()
             event.accept()
             return
+        if event.key() == Qt.Key.Key_Down:
+            self.set_secondary_fields_visible(False)
+            event.accept()
+            return
+        if event.key() == Qt.Key.Key_Up:
+            self.set_secondary_fields_visible(True)
+            event.accept()
+            return
         if event.key() == Qt.Key.Key_Space:
             self.repeat_card()
             event.accept()
@@ -226,9 +287,13 @@ class FlashcardsDialog(QDialog):
     def _render(self) -> None:
         while self.card_layout.count():
             item = self.card_layout.takeAt(0)
-            if item.widget():
-                item.widget().deleteLater()
+            widget = item.widget()
+            if widget:
+                widget.setParent(None)
+                widget.deleteLater()
         fields = self.current_fields()
+        if not self._secondary_fields_visible:
+            fields = [field for field in fields if field.primary]
         self.card_layout.addStretch(1)
         palettes = {
             "source": ("#eaf3ff", "#5c91cf"),
@@ -272,10 +337,23 @@ class FlashcardsDialog(QDialog):
             panel_layout.addWidget(value, 1)
             self.card_layout.addWidget(panel)
         self.card_layout.addStretch(1)
-        self.position_label.setText(f"{self._position + 1} / {len(self._line_numbers)}")
-        self.progress_bar.setValue(self._position + 1)
+        if self._playback_progress:
+            current, total = self._playback_progress
+            self.position_label.setText(f"{current} / {total}")
+            self.progress_bar.setRange(1, total)
+            self.progress_bar.setValue(current)
+        else:
+            self.position_label.setText(
+                f"{self._position + 1} / {len(self._line_numbers)}"
+            )
+            self.progress_bar.setRange(1, len(self._line_numbers))
+            self.progress_bar.setValue(self._position + 1)
         can_cycle = self._cycle_navigation and len(self._line_numbers) > 1
         self.previous_button.setEnabled(self._position > 0 or can_cycle)
         self.next_button.setEnabled(
             self._position < len(self._line_numbers) - 1 or can_cycle
         )
+
+    def _clear_playback_view(self) -> None:
+        self._playback_fields = None
+        self._playback_progress = None
