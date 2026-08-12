@@ -89,6 +89,14 @@ complete MP3, an internal JSON timing manifest and an SRT subtitle file. If TTS
 is temporarily unavailable, the completed translation remains available and
 the audio error is reported separately.
 
+After a successful translation, Source enters protected study mode: accidental
+editing is disabled, **Translate** becomes inactive, and **Edit** in the Source
+header becomes available. Click any sentence to select it; `Down`/`Right` move
+to and speak the next sentence, `Up`/`Left` move to and speak the previous one,
+and `Space` repeats the current sentence. **Speak** continues sequentially from
+the selected sentence to the end or until **Stop**. **Edit** stops playback,
+unlocks Source, clears A–B and stale audio, and enables **Translate** again.
+
 ## Speech and synchronized playback
 
 Select a Microsoft TTS voice and use:

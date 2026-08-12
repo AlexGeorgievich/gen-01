@@ -7,6 +7,7 @@ from pathlib import Path
 
 from .errors import StorageError
 from .models import Document
+from .mp3 import mp3_duration_ms
 from .rows import build_sentence_translation_rows
 from .storage import save_document
 from .timed_audio import TimedAudioManifest, load_manifest
@@ -118,12 +119,34 @@ def load_offline_package(audio_path: Path, language: str) -> OfflinePackage:
         raise StorageError("JSON временных меток повреждён или пуст.")
     if manifest.language != language:
         raise StorageError("JSON временных меток не соответствует выбранному языку.")
+    actual_duration = mp3_duration_ms(paths["MP3"])
+    if actual_duration is not None and abs(actual_duration - manifest.total_duration_ms) > 1000:
+        raise StorageError(
+            "MP3 и JSON временных меток рассинхронизированы. "
+            "Сформируйте аудиопакет повторно."
+        )
     expected_rows = build_sentence_translation_rows(
         document.original, document.translation, document.transcription
     )
     if len(manifest.lines) != len(expected_rows):
         raise StorageError(
             "Пакет не содержит временные метки для всего документа."
+        )
+    if any(
+        timed.line != row.index
+        or timed.source != row.source
+        or timed.translation != row.translation
+        or timed.transcription != row.transcription
+        or (
+            timed.source_start is not None
+            and timed.source_start != row.source_start
+        )
+        or (timed.source_end is not None and timed.source_end != row.source_end)
+        for timed, row in zip(manifest.lines, expected_rows, strict=True)
+    ):
+        raise StorageError(
+            "Текст документа не соответствует временным меткам пакета. "
+            "Сформируйте пакет повторно."
         )
     return OfflinePackage(language, audio_path.stem, base_path, document, manifest)
 

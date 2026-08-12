@@ -11,6 +11,7 @@ import edge_tts
 from deep_translator import GoogleTranslator
 
 from .errors import NetworkServiceError, OperationCancelled
+from .mp3 import mp3_duration_ms
 from .text import split_text
 from .tts import TtsSettings
 
@@ -176,7 +177,10 @@ class EdgeSpeechProvider:
                 return max(1, (last_boundary_end + 9_999) // 10_000)
             return max(1, len(text.split()) * 400)
 
-        return self._run_with_retry(lambda: asyncio.run(run()), output, cancelled)
+        boundary_duration = self._run_with_retry(
+            lambda: asyncio.run(run()), output, cancelled
+        )
+        return mp3_duration_ms(output) or boundary_duration
 
     def _run_with_retry(
         self,

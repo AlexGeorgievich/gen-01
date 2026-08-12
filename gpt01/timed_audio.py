@@ -4,11 +4,13 @@ import hashlib
 import json
 import shutil
 import tempfile
+import time
 from collections.abc import Callable
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
 
+from .errors import NetworkServiceError
 from .models import TranslationRow
 from .tts import TtsSettings
 
@@ -155,6 +157,8 @@ def build_timed_audio_package(
     speech_text: Callable[[str], str] | None = None,
     progress: ProgressCallback | None = None,
     resume_root: Path | None = None,
+    cooldown_every: int = 40,
+    cooldown_seconds: float = 2.0,
 ) -> TimedAudioPackage:
     if not rows:
         raise ValueError("timed audio requires at least one translated row")
@@ -186,9 +190,11 @@ def build_timed_audio_package(
                     part = part_root / f"{current:06d}.mp3"
                     part_key = str(current)
                     duration_ms = completed.get(part_key, 0)
+                    synthesized_now = False
                     if duration_ms <= 0 or not part.is_file() or part.stat().st_size == 0:
                         part.unlink(missing_ok=True)
                         duration_ms = synthesize(prepare_speech(row.translation), part)
+                        synthesized_now = True
                         if not part.is_file() or part.stat().st_size == 0:
                             raise OSError(f"TTS did not create audio part {current}")
                         if checkpoint_path is not None:
@@ -205,6 +211,14 @@ def build_timed_audio_package(
                     cursor_ms = timed_line.end_ms
                     if progress:
                         progress(current, len(rows))
+                    if (
+                        synthesized_now
+                        and current < len(rows)
+                        and cooldown_every > 0
+                        and cooldown_seconds > 0
+                        and current % cooldown_every == 0
+                    ):
+                        time.sleep(cooldown_seconds)
         finally:
             if temporary_directory is not None:
                 temporary_directory.cleanup()
@@ -219,11 +233,39 @@ def build_timed_audio_package(
         if job_directory is not None:
             shutil.rmtree(job_directory, ignore_errors=True)
         return TimedAudioPackage(audio_path, manifest_path, srt_path, manifest)
+    except NetworkServiceError as exc:
+        audio_path.unlink(missing_ok=True)
+        manifest_path.unlink(missing_ok=True)
+        srt_path.unlink(missing_ok=True)
+        saved_count = _saved_part_count(job_directory, completed)
+        if job_directory is not None and saved_count:
+            raise NetworkServiceError(
+                f"Синтез приостановлен из-за недоступности сети: готово "
+                f"{saved_count} из {len(rows)} фрагментов. Части сохранены; "
+                f"повторите команду позже, и работа продолжится с места остановки. "
+                f"Причина: {exc}"
+            ) from exc
+        raise
     except Exception:
         audio_path.unlink(missing_ok=True)
         manifest_path.unlink(missing_ok=True)
         srt_path.unlink(missing_ok=True)
         raise
+
+
+def _saved_part_count(
+    job_directory: Path | None,
+    completed: dict[str, int],
+) -> int:
+    if job_directory is None:
+        return 0
+    return sum(
+        1
+        for key, duration_ms in completed.items()
+        if duration_ms > 0
+        and (job_directory / f"{int(key):06d}.mp3").is_file()
+        and (job_directory / f"{int(key):06d}.mp3").stat().st_size > 0
+    )
 
 
 def timed_audio_fingerprint(
@@ -235,7 +277,7 @@ def timed_audio_fingerprint(
 ) -> str:
     prepare_speech = speech_text or (lambda text: text)
     payload = {
-        "version": 1,
+        "version": 2,
         "language": language,
         "voice": voice,
         "rate": settings.rate,

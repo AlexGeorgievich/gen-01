@@ -53,6 +53,16 @@ if ($unexpectedPortableFiles) {
 Copy-Item -LiteralPath (Join-Path $projectRoot "assets\language_data_README.txt") `
     -Destination (Join-Path $portableDataDirectory "README.txt") -Force
 
+$testDataSource = Join-Path $projectRoot "text_for_tests"
+$testDataDestination = Join-Path $distDirectory "text_for_tests"
+if (-not (Test-Path -LiteralPath $testDataSource -PathType Container)) {
+    throw "User test data directory is missing: $testDataSource"
+}
+if (Test-Path -LiteralPath $testDataDestination) {
+    Remove-Item -LiteralPath $testDataDestination -Recurse -Force
+}
+Copy-Item -LiteralPath $testDataSource -Destination $testDataDestination -Recurse
+
 New-Item -ItemType Directory -Path $releaseDirectory -Force | Out-Null
 $archiveName = "VoiceGun-$version-windows-x64.zip"
 $archivePath = Join-Path $releaseDirectory $archiveName
@@ -76,7 +86,8 @@ try {
         "VoiceGun/_internal/",
         "VoiceGun/_internal/docs/USER_GUIDE_EN.md",
         "VoiceGun/_internal/docs/USER_GUIDE_RU.md",
-        "VoiceGun/language_data/README.txt"
+        "VoiceGun/language_data/README.txt",
+        "VoiceGun/text_for_tests/"
     )
     $entryNames = $zip.Entries.FullName -replace '\\', '/'
     foreach ($requiredEntry in $requiredEntries) {

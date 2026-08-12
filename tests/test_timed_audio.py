@@ -1,5 +1,6 @@
 import pytest
 
+from gpt01.errors import NetworkServiceError
 from gpt01.models import TranslationRow
 from gpt01.rows import build_sentence_translation_rows
 from gpt01.timed_audio import (
@@ -138,11 +139,11 @@ def test_failed_package_resumes_from_persisted_audio_parts(tmp_path):
     def interrupted_synthesis(text, output):
         first_calls.append(text)
         if text == "deux":
-            raise TimeoutError("network interruption")
+            raise NetworkServiceError("network interruption")
         output.write_bytes(text.encode())
         return 500
 
-    with pytest.raises(TimeoutError):
+    with pytest.raises(NetworkServiceError, match="готово 1 из 3"):
         build_timed_audio_package(
             rows,
             audio,

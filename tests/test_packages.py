@@ -36,6 +36,16 @@ def create_package(root, stem="lesson_en", language="English"):
     return audio, document, manifest
 
 
+def test_package_with_audio_duration_far_from_manifest_is_rejected(
+    tmp_path, monkeypatch
+):
+    audio, _document, _manifest = create_package(tmp_path)
+    monkeypatch.setattr("gpt01.packages.mp3_duration_ms", lambda _path: 10_000)
+
+    with pytest.raises(StorageError, match="рассинхронизированы"):
+        load_offline_package(audio, "English")
+
+
 def test_complete_package_round_trip_and_discovery(tmp_path):
     audio, document, manifest = create_package(tmp_path)
 
@@ -53,6 +63,25 @@ def test_incomplete_or_partial_document_package_is_rejected(tmp_path):
     audio.with_suffix(".srt").unlink()
 
     with pytest.raises(StorageError, match="SRT"):
+        load_offline_package(audio, "English")
+
+
+def test_package_with_timestamps_for_different_text_is_rejected(tmp_path):
+    audio, _document, manifest = create_package(tmp_path)
+    changed = TimedAudioManifest.create(
+        manifest.language,
+        manifest.voice,
+        TtsSettings(rate=manifest.rate),
+        [
+            timed_line_from_row(
+                TranslationRow(0, "different", "one", "/wʌn/"), 0, 500
+            ),
+            manifest.lines[1],
+        ],
+    )
+    save_manifest(audio.with_suffix(".json"), changed)
+
+    with pytest.raises(StorageError, match="не соответствует временным меткам"):
         load_offline_package(audio, "English")
 
 

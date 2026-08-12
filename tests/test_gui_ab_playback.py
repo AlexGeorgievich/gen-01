@@ -9,10 +9,12 @@ from PySide6.QtTest import QTest  # noqa: E402
 from PySide6.QtWidgets import QApplication  # noqa: E402
 
 from app import MainWindow  # noqa: E402
+from gpt01.models import TranslationRow  # noqa: E402
 from gpt01.rows import build_sentence_translation_rows  # noqa: E402
 from gpt01.session import SessionRepository  # noqa: E402
 from gpt01.timed_audio import (  # noqa: E402
     TimedAudioManifest,
+    TimedAudioPackage,
     TimedLine,
     save_manifest,
     save_srt,
@@ -29,6 +31,53 @@ def set_caret_line(window, line_number):
     cursor = window.source_edit.textCursor()
     cursor.setPosition(block.position())
     window.source_edit.setTextCursor(cursor)
+
+
+def click_source_position(window, position):
+    cursor = window.source_edit.textCursor()
+    cursor.setPosition(position)
+    point = window.source_edit.cursorRect(cursor).center()
+    QTest.mouseClick(window.source_edit.viewport(), Qt.MouseButton.LeftButton, pos=point)
+
+
+def test_study_mode_locks_source_and_uses_arrows_space_and_current_start(
+    qapp, tmp_path
+):
+    window = MainWindow(SessionRepository(tmp_path))
+    window.source_edit.setPlainText("First. Second. Third.")
+    window.translation_edit.setPlainText("Первое. Второе. Третье.")
+    window.transcription_edit.setPlainText("one. two. three.")
+    window._set_study_mode(True)
+    spoken = []
+    window._play_study_row = lambda row: spoken.append(row.source)
+    cursor = window.source_edit.textCursor()
+    cursor.setPosition(0)
+    window.source_edit.setTextCursor(cursor)
+    window.source_edit.setFocus()
+
+    QTest.keyClick(window.source_edit, Qt.Key.Key_Down)
+    QTest.keyClick(window.source_edit, Qt.Key.Key_Space)
+    QTest.keyClick(window.source_edit, Qt.Key.Key_Left)
+
+    assert window.source_edit.isReadOnly()
+    assert not window.translate_button.isEnabled()
+    assert window.edit_source_button.isEnabled()
+    assert spoken == ["Second.", "Second.", "First."]
+
+    started = []
+    QTest.keyClick(window.source_edit, Qt.Key.Key_Right)
+    window._begin_sequence = lambda rows, scope: started.append(
+        ([row.source for row in rows], scope)
+    )
+    window._start_sequence()
+    assert started == [(["Second.", "Third."], "all")]
+
+    window.enable_source_editing()
+    assert not window.source_edit.isReadOnly()
+    assert window.translate_button.isEnabled()
+    assert not window.edit_source_button.isEnabled()
+    window._dirty = False
+    window.close()
 
 
 def install_timed_package(window, tmp_path, lines=None):
@@ -288,6 +337,40 @@ def test_marker_button_uses_blinking_text_cursor_without_mouse_move(qapp, tmp_pa
     window.close()
 
 
+def test_mouse_click_previews_sentence_before_each_marker_is_fixed(qapp, tmp_path):
+    window = MainWindow(SessionRepository(tmp_path))
+    source = "First. Second. Third."
+    window.source_edit.setPlainText(source)
+    window.show()
+
+    click_source_position(window, source.index("Second") + 2)
+    second_span = window._marker_candidate_span
+    assert second_span is not None
+    assert source[slice(*second_span)] == "Second."
+
+    click_source_position(window, source.index("First") + 2)
+    first_span = window._marker_candidate_span
+    assert first_span is not None
+    assert source[slice(*first_span)] == "First."
+    window.mark_a_button.click()
+    assert window._range_a_span == first_span
+    assert window._marker_candidate_span is None
+    assert "#c8e6c9" in {
+        selection.format.background().color().name()
+        for selection in window.source_edit.extraSelections()
+    }
+
+    click_source_position(window, source.index("Third") + 2)
+    third_span = window._marker_candidate_span
+    assert third_span is not None
+    assert window._range_a_span == first_span
+    window.mark_b_button.click()
+    assert window._range_b_span == third_span
+    assert window._marker_candidate_span is None
+    window._dirty = False
+    window.close()
+
+
 def test_source_change_resets_markers_and_repeat_state(qapp, tmp_path):
     window = MainWindow(SessionRepository(tmp_path))
     window.source_edit.setPlainText("one\ntwo")
@@ -449,6 +532,46 @@ def test_speak_uses_prepared_timestamps_for_synchronized_highlight(qapp, tmp_pat
     assert not window._timed_playback_active
     assert window.save_audio_button.isEnabled()
 
+
+def test_opened_package_speak_and_replay_start_at_selected_study_row(qapp, tmp_path):
+    window = MainWindow(SessionRepository(tmp_path))
+    window.source_edit.setPlainText("one\ntwo")
+    window.translation_edit.setPlainText("un\ndeux")
+    install_timed_package(window, tmp_path)
+    window._set_study_mode(True)
+    set_caret_line(window, 1)
+    started = []
+    window._start_timed_playback = lambda start, stop, scope: started.append(
+        (start, stop, scope)
+    )
+
+    window.speak_text()
+    window.replay_audio()
+
+    assert started == [(1000, None, "all"), (1000, None, "all")]
+    window._dirty = False
+    window.close()
+
+
+def test_offline_package_never_falls_back_to_network_synthesis(qapp, tmp_path):
+    window = MainWindow(SessionRepository(tmp_path))
+    window.source_edit.setPlainText("one\ntwo")
+    window.translation_edit.setPlainText("un\ndeux")
+    install_timed_package(window, tmp_path)
+    window._offline_package_active = True
+    missing_row = TranslationRow(7, "missing", "absent", "absent")
+    network_fallback = []
+    errors = []
+    window._begin_sequence = lambda rows, scope: network_fallback.append((rows, scope))
+    window._show_offline_marker_error = lambda: errors.append(True)
+
+    window._play_study_row(missing_row)
+
+    assert errors == [True]
+    assert network_fallback == []
+    window._dirty = False
+    window.close()
+
     window._reset_audio_state()
     window._dirty = False
     window.close()
@@ -561,6 +684,33 @@ def test_save_mp3_copies_prepared_mp3_json_and_srt(
     )
     assert window._audio_is_complete_document
 
+    window._reset_audio_state()
+    window._dirty = False
+    window.close()
+
+
+def test_saving_opened_package_under_same_name_updates_without_same_file_error(
+    qapp, tmp_path
+):
+    window = MainWindow(SessionRepository(tmp_path))
+    window.source_edit.setPlainText("one\ntwo")
+    window.translation_edit.setPlainText("un\ndeux")
+    install_timed_package(window, tmp_path)
+    package = TimedAudioPackage(
+        window.audio_path,
+        window.audio_manifest_path,
+        window.audio_srt_path,
+        window.timed_manifest,
+    )
+    errors = []
+    window._show_error = errors.append
+
+    window._save_audio_package(package, package.audio_path)
+
+    assert errors == []
+    assert package.audio_path.read_bytes() == b"complete-audio"
+    assert package.audio_path.with_suffix(".document.json").is_file()
+    assert package.audio_path.with_suffix(".txt").is_file()
     window._reset_audio_state()
     window._dirty = False
     window.close()

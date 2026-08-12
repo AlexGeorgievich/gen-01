@@ -169,6 +169,8 @@ class MainWindow(QMainWindow):
         self._dirty = False
         self._loading_document = False
         self._hover_line_number: int | None = None
+        self._marker_candidate_line: int | None = None
+        self._marker_candidate_span: tuple[int, int] | None = None
         self._audio_line_number: int | None = None
         self._replay_highlight_line: int | None = None
         self._replay_source_span: tuple[int, int] | None = None
@@ -206,7 +208,10 @@ class MainWindow(QMainWindow):
         self._timed_playback_active = False
         self._timed_playback_scope: str | None = None
         self._timed_stop_ms: int | None = None
+        self._timed_pending_start_ms: int | None = None
         self._audio_is_complete_document = False
+        self._offline_package_active = False
+        self._study_mode = False
         self.player = QMediaPlayer(self)
         self.audio_output = QAudioOutput(self)
         self.player.setAudioOutput(self.audio_output)
@@ -219,6 +224,7 @@ class MainWindow(QMainWindow):
         self.source_edit.setPlaceholderText(self._t("source_placeholder"))
         self.source_edit.viewport().setMouseTracking(True)
         self.source_edit.viewport().installEventFilter(self)
+        self.source_edit.installEventFilter(self)
         self.translation_edit = QTextEdit()
         self.translation_edit.setPlaceholderText(self._t("translation_placeholder"))
         self.translation_edit.setAcceptRichText(False)
@@ -232,6 +238,8 @@ class MainWindow(QMainWindow):
         for title in (self.source_title, self.translation_title, self.transcription_title):
             title.setStyleSheet("font-weight: 600;")
         self.source_clear_button = QPushButton(self._t("clear"))
+        self.edit_source_button = QPushButton(self._t("edit_source"))
+        self.edit_source_button.setToolTip(self._t("edit_source_tip"))
         self.translation_clear_button = QPushButton(self._t("clear"))
         self.transcription_clear_button = QPushButton(self._t("clear"))
         for button in (
@@ -409,6 +417,8 @@ class MainWindow(QMainWindow):
         self.translation_edit.setPlaceholderText(self._t("translation_placeholder"))
         self.transcription_edit.setPlaceholderText(self._t("transcription_placeholder"))
         self.source_title.setText(self._t("source_text"))
+        self.edit_source_button.setText(self._t("edit_source"))
+        self.edit_source_button.setToolTip(self._t("edit_source_tip"))
         self.open_button.setText(self._t("open"))
         self.open_text_action.setText(self._t("open_text_menu"))
         self.text_packages_menu.setTitle(self._t("text_packages"))
@@ -514,6 +524,7 @@ class MainWindow(QMainWindow):
         self.source_header = QHBoxLayout()
         self.source_header.addWidget(self.source_title)
         self.source_header.addStretch(1)
+        self.source_header.addWidget(self.edit_source_button)
         self.source_header.addWidget(self.source_toggle_button)
         self.source_header.addWidget(self.source_clear_button)
         source_layout.addLayout(self.source_header)
@@ -665,6 +676,7 @@ class MainWindow(QMainWindow):
         self.package_history_action.triggered.connect(self.open_package_history)
         self.batch_translation_action.triggered.connect(self.batch_process_files)
         self.translate_button.clicked.connect(self.translate_text)
+        self.edit_source_button.clicked.connect(self.enable_source_editing)
         self.speak_button.clicked.connect(self.speak_text)
         self.replay_button.clicked.connect(self.replay_audio)
         self.stop_button.clicked.connect(self.stop_current_operation)
@@ -926,7 +938,8 @@ class MainWindow(QMainWindow):
         else:
             self.progress.setRange(0, 0)
             self.progress.setFormat("")
-        self.translate_button.setEnabled(not busy)
+        self.translate_button.setEnabled(not busy and not self._study_mode)
+        self.edit_source_button.setEnabled(not busy and self._study_mode)
         self.speak_button.setEnabled(not busy)
         self.open_button.setEnabled(not busy)
         self.batch_translation_action.setEnabled(not busy)
@@ -970,6 +983,7 @@ class MainWindow(QMainWindow):
             self.current_source_path = Path(filename)
             self._remember_directory("last_open_directory", self.current_source_path.parent)
             self.statusBar().showMessage(self._t("opened", path=filename))
+            self._set_study_mode(False)
         except AppError as exc:
             self._loading_document = False
             self._show_error(str(exc))
@@ -1057,6 +1071,7 @@ class MainWindow(QMainWindow):
             self.audio_srt_path = package.srt_path
             self.timed_manifest = package.manifest
             self._audio_is_complete_document = True
+            self._offline_package_active = True
             self.player.setSource(QUrl.fromLocalFile(str(package.audio_path)))
             self._reset_range_markers()
             self._dirty = False
@@ -1071,6 +1086,7 @@ class MainWindow(QMainWindow):
             self.statusBar().showMessage(
                 self._t("package_opened", name=package.stem)
             )
+            self._set_study_mode(True)
             return True
         except (AppError, OSError, ValueError) as exc:
             self._loading_document = False
@@ -1316,6 +1332,7 @@ class MainWindow(QMainWindow):
         )
         if audio_error:
             self._show_error(self._t("translation_audio_failed", error=audio_error))
+        self._set_study_mode(True)
 
     @staticmethod
     def _temporary_audio_package_paths() -> tuple[Path, Path, Path]:
@@ -1399,7 +1416,8 @@ class MainWindow(QMainWindow):
             self._start_ab_sequence()
             return
         if self._timed_audio_ready():
-            self._start_timed_playback(0, None, "all")
+            start_ms = self._timed_start_for_current_row()
+            self._start_timed_playback(start_ms, None, "all")
         else:
             self._start_sequence()
 
@@ -1463,6 +1481,10 @@ class MainWindow(QMainWindow):
                     "line",
                 )
                 return
+
+        if self._offline_package_active:
+            self._show_offline_marker_error()
+            return
 
         voice = self.selected_voice()
         if not voice:
@@ -1549,6 +1571,7 @@ class MainWindow(QMainWindow):
         self.audio_srt_path = None
         self.timed_manifest = None
         self._audio_is_complete_document = False
+        self._offline_package_active = False
         self.player.stop()
         self.player.setSource(QUrl())
         self.player.setSource(QUrl.fromLocalFile(filename))
@@ -1573,6 +1596,24 @@ class MainWindow(QMainWindow):
         if not self._loading_document:
             self._dirty = True
         self._reset_audio_state()
+
+    def _set_study_mode(self, enabled: bool) -> None:
+        self._study_mode = enabled
+        self.source_edit.setReadOnly(enabled)
+        busy = self.tasks.foreground is not None
+        self.translate_button.setEnabled(not busy and not enabled)
+        self.edit_source_button.setEnabled(not busy and enabled)
+        self.source_clear_button.setEnabled(not busy and not enabled)
+
+    @Slot()
+    def enable_source_editing(self) -> None:
+        if not self._study_mode:
+            return
+        self.stop_current_operation()
+        self._reset_range_markers()
+        self._reset_audio_state()
+        self._set_study_mode(False)
+        self.source_edit.setFocus()
 
     @Slot()
     def _on_source_text_changed(self) -> None:
@@ -1861,6 +1902,9 @@ class MainWindow(QMainWindow):
                     "cards",
                 )
                 return
+        if self._offline_package_active:
+            self._show_offline_marker_error()
+            return
         self._begin_sequence(rows, "cards")
 
     def _play_card_row(self, row: TranslationRow) -> None:
@@ -1885,6 +1929,9 @@ class MainWindow(QMainWindow):
                     "cards",
                 )
                 return
+        if self._offline_package_active:
+            self._show_offline_marker_error()
+            return
         self._begin_sequence([row], "cards")
 
     def _play_card_range_cycle(
@@ -1913,6 +1960,9 @@ class MainWindow(QMainWindow):
             if interval:
                 self._start_timed_playback(interval[0], interval[1], "cards_range")
                 return
+        if self._offline_package_active:
+            self._show_offline_marker_error()
+            return
         self._begin_sequence(rows, "cards_range")
 
     def _stop_card_playback(self) -> None:
@@ -2031,14 +2081,25 @@ class MainWindow(QMainWindow):
             self.statusBar().showMessage(self._t("marker_caret", marker=marker))
             return
         all_spans = sentence_spans(self.source_edit.toPlainText())
-        selected_span = next(
-            (
-                span
-                for span in all_spans
-                if span.start <= cursor.position() <= span.end
-            ),
-            next((span for span in all_spans if span.line == block.blockNumber()), None),
-        )
+        selected_span = None
+        if self._marker_candidate_span is not None:
+            selected_span = next(
+                (
+                    span
+                    for span in all_spans
+                    if (span.start, span.end) == self._marker_candidate_span
+                ),
+                None,
+            )
+        if selected_span is None:
+            selected_span = next(
+                (
+                    span
+                    for span in all_spans
+                    if span.start <= cursor.position() <= span.end
+                ),
+                next((span for span in all_spans if span.line == block.blockNumber()), None),
+            )
         if selected_span is None:
             self.statusBar().showMessage(self._t("marker_caret", marker=marker))
             return
@@ -2062,6 +2123,8 @@ class MainWindow(QMainWindow):
             self._range_b_span = span_range
             self._range_b_sentence_number = sentence_number
             self.mark_b_button.setText(button_text)
+        self._marker_candidate_line = None
+        self._marker_candidate_span = None
         self._ab_repeat_ready = False
         self._render_source_highlights()
         self._update_ab_controls()
@@ -2076,6 +2139,8 @@ class MainWindow(QMainWindow):
         self._range_b_span = None
         self._range_a_sentence_number = None
         self._range_b_sentence_number = None
+        self._marker_candidate_line = None
+        self._marker_candidate_span = None
         self._ab_repeat_ready = False
         self.mark_a_button.setText("A")
         self.mark_b_button.setText("B")
@@ -2198,16 +2263,108 @@ class MainWindow(QMainWindow):
         return list(self.timed_manifest.lines[start : end + 1])
 
     def eventFilter(self, watched: QObject, event: QEvent) -> bool:
+        if (
+            watched is self.source_edit
+            and self._study_mode
+            and event.type() == QEvent.Type.KeyPress
+        ):
+            key = event.key()  # type: ignore[attr-defined]
+            if key in {
+                Qt.Key.Key_Left,
+                Qt.Key.Key_Right,
+                Qt.Key.Key_Up,
+                Qt.Key.Key_Down,
+                Qt.Key.Key_Space,
+            }:
+                if event.isAutoRepeat():  # type: ignore[attr-defined]
+                    return True
+                if key == Qt.Key.Key_Space:
+                    self._speak_current_study_row()
+                else:
+                    self._move_study_cursor(
+                        1 if key in {Qt.Key.Key_Right, Qt.Key.Key_Down} else -1
+                    )
+                return True
         if watched is self.source_edit.viewport():
             if event.type() in {QEvent.Type.MouseMove, QEvent.Type.MouseButtonPress}:
                 position = event.position().toPoint()  # type: ignore[attr-defined]
                 cursor = self.source_edit.cursorForPosition(position)
-                self._hover_line_number = cursor.blockNumber()
+                if event.type() == QEvent.Type.MouseButtonPress:
+                    self._hover_line_number = None
+                    selected = next(
+                        (
+                            span
+                            for span in sentence_spans(self.source_edit.toPlainText())
+                            if span.start <= cursor.position() <= span.end
+                        ),
+                        None,
+                    )
+                    self._marker_candidate_line = (
+                        selected.line if selected is not None else cursor.blockNumber()
+                    )
+                    self._marker_candidate_span = (
+                        (selected.start, selected.end) if selected is not None else None
+                    )
+                else:
+                    self._hover_line_number = cursor.blockNumber()
                 self._render_source_highlights()
             elif event.type() == QEvent.Type.Leave:
                 self._hover_line_number = None
                 self._render_source_highlights()
         return super().eventFilter(watched, event)
+
+    def _study_rows(self) -> list[TranslationRow]:
+        return build_sentence_translation_rows(
+            self.source_edit.toPlainText(),
+            self.translation_edit.toPlainText(),
+            self.transcription_edit.toPlainText(),
+        )
+
+    def _current_study_row(self) -> TranslationRow | None:
+        cursor = self.source_edit.textCursor()
+        return self._sentence_row_at_cursor(
+            self._study_rows(), cursor.position(), cursor.blockNumber(), "source"
+        )
+
+    def _select_study_row(self, row: TranslationRow) -> None:
+        cursor = self.source_edit.textCursor()
+        position = row.source_start
+        if position is None:
+            block = self.source_edit.document().findBlockByNumber(row.index)
+            position = block.position() if block.isValid() else 0
+        cursor.setPosition(position)
+        self.source_edit.setTextCursor(cursor)
+        self._show_synchronized_row(row)
+
+    def _move_study_cursor(self, offset: int) -> None:
+        rows = self._study_rows()
+        current = self._current_study_row()
+        if not rows or current is None:
+            return
+        index = rows.index(current)
+        target = rows[min(max(0, index + offset), len(rows) - 1)]
+        self._select_study_row(target)
+        self._play_study_row(target)
+
+    def _speak_current_study_row(self) -> None:
+        row = self._current_study_row()
+        if row is not None:
+            self._select_study_row(row)
+            self._play_study_row(row)
+
+    def _play_study_row(self, row: TranslationRow) -> None:
+        if self._timed_audio_ready() and self.timed_manifest:
+            timed_line = next(
+                (item for item in self.timed_manifest.lines if _timed_matches_row(item, row)),
+                None,
+            )
+            if timed_line:
+                self._start_timed_playback(timed_line.start_ms, timed_line.end_ms, "line")
+                return
+        if self._offline_package_active:
+            self._show_offline_marker_error()
+            return
+        self._begin_sequence([row], "line")
 
     def _render_source_highlights(self) -> None:
         selections: list[QTextEdit.ExtraSelection] = []
@@ -2249,6 +2406,15 @@ class MainWindow(QMainWindow):
             selection.format.setBackground(color)
             selection.format.setProperty(QTextFormat.Property.FullWidthSelection, True)
             selections.append(selection)
+        if self._marker_candidate_line is not None:
+            selections.append(
+                self._text_or_line_selection(
+                    self.source_edit,
+                    self._marker_candidate_span,
+                    self._marker_candidate_line,
+                    QColor("#ffe082"),
+                )
+            )
         if self._replay_highlight_line is not None:
             selections.append(
                 self._text_or_line_selection(
@@ -2291,6 +2457,15 @@ class MainWindow(QMainWindow):
         card_progress: tuple[int, int] | None = None,
     ) -> None:
         self._replay_highlight_line = row.index
+        if self._study_mode and self._active_cards_dialog is None:
+            cursor = self.source_edit.textCursor()
+            if row.source_start is not None:
+                cursor.setPosition(row.source_start)
+            else:
+                block = self.source_edit.document().findBlockByNumber(row.index)
+                if block.isValid():
+                    cursor.setPosition(block.position())
+            self.source_edit.setTextCursor(cursor)
         self._set_replay_spans(
             _span(row.source_start, row.source_end),
             _span(row.translation_start, row.translation_end),
@@ -2450,12 +2625,13 @@ class MainWindow(QMainWindow):
         self._timed_playback_scope = None
         self._timed_stop_ms = None
         self._audio_is_complete_document = False
+        self._offline_package_active = False
         self.ab_audio_cache.clear()
         self.replay_button.setEnabled(bool(self.source_edit.toPlainText().strip()))
         self._update_save_audio_button()
         if not self.progress.isVisible():
             self.speak_button.setEnabled(True)
-            self.translate_button.setEnabled(True)
+            self.translate_button.setEnabled(not self._study_mode)
             self.open_button.setEnabled(True)
 
     @Slot()
@@ -2464,7 +2640,9 @@ class MainWindow(QMainWindow):
             self._start_ab_sequence()
             return
         if self._timed_audio_ready():
-            self._start_timed_playback(0, None, "all")
+            self._start_timed_playback(
+                self._timed_start_for_current_row(), None, "all"
+            )
         else:
             self._start_sequence()
 
@@ -2485,6 +2663,10 @@ class MainWindow(QMainWindow):
                     self, self.windowTitle(), self._t("no_speech_lines")
                 )
             return
+        if self._study_mode:
+            current = self._current_study_row()
+            if current in rows:
+                rows = rows[rows.index(current) :]
         self._begin_sequence(rows, "all")
 
     @Slot()
@@ -2516,6 +2698,9 @@ class MainWindow(QMainWindow):
                 self._ab_repeat_ready = False
                 self._start_timed_playback(interval[0], interval[1], "ab")
                 return
+        if self._offline_package_active:
+            self._show_offline_marker_error()
+            return
         if not rows:
             QMessageBox.information(
                 self,
@@ -2526,6 +2711,9 @@ class MainWindow(QMainWindow):
         self._begin_sequence(rows, "ab")
 
     def _begin_sequence(self, rows: list[TranslationRow], scope: str) -> None:
+        if self._offline_package_active:
+            self._show_offline_marker_error()
+            return
         if not self.selected_voice():
             QMessageBox.information(self, self.windowTitle(), self._t("select_voice"))
             return
@@ -2694,6 +2882,21 @@ class MainWindow(QMainWindow):
         editor.blockSignals(False)
 
     def _media_status_changed(self, status: QMediaPlayer.MediaStatus) -> None:
+        if (
+            status
+            in {
+                QMediaPlayer.MediaStatus.LoadedMedia,
+                QMediaPlayer.MediaStatus.BufferedMedia,
+            }
+            and self._timed_playback_active
+            and self._timed_pending_start_ms is not None
+        ):
+            start_ms = self._timed_pending_start_ms
+            self._timed_pending_start_ms = None
+            self.player.setPosition(start_ms)
+            self._timed_position_changed(start_ms)
+            self.player.play()
+            return
         if status != QMediaPlayer.MediaStatus.EndOfMedia:
             return
         if self._timed_playback_active:
@@ -2989,9 +3192,9 @@ class MainWindow(QMainWindow):
         try:
             json_target = target.with_suffix(".json")
             srt_target = target.with_suffix(".srt")
-            shutil.copyfile(package.audio_path, target)
-            shutil.copyfile(package.manifest_path, json_target)
-            shutil.copyfile(package.srt_path, srt_target)
+            self._copy_package_file(package.audio_path, target)
+            self._copy_package_file(package.manifest_path, json_target)
+            self._copy_package_file(package.srt_path, srt_target)
             if register_package:
                 save_package_document(
                     target,
@@ -3018,12 +3221,21 @@ class MainWindow(QMainWindow):
         except (AppError, OSError) as exc:
             self._show_error(self._t("save_audio_failed", error=exc))
 
+    @staticmethod
+    def _copy_package_file(source: Path, target: Path) -> None:
+        """Copy one package member unless it already is the selected target."""
+        if source.resolve() == target.resolve():
+            return
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(source, target)
+
     @Slot()
     def stop_audio(self) -> None:
         was_timed = self._timed_playback_active
         self._timed_playback_active = False
         self._timed_playback_scope = None
         self._timed_stop_ms = None
+        self._timed_pending_start_ms = None
         self.player.stop()
         self.player.setSource(QUrl())
         if was_timed:
@@ -3052,15 +3264,25 @@ class MainWindow(QMainWindow):
             return
         if self.sequence.active:
             self._stop_sequence()
+        desired_source = QUrl.fromLocalFile(str(self.audio_path))
         self.player.stop()
-        self.player.setSource(QUrl.fromLocalFile(str(self.audio_path)))
         self._timed_playback_active = True
         self._timed_playback_scope = scope
         self._timed_stop_ms = stop_ms
         self._ab_repeat_ready = False
-        self.player.setPosition(max(0, start_ms))
-        self._timed_position_changed(max(0, start_ms))
-        self.player.play()
+        requested_start = max(0, start_ms)
+        self._timed_position_changed(requested_start)
+        if (
+            self.player.source() != desired_source
+            or self.player.mediaStatus() == QMediaPlayer.MediaStatus.LoadingMedia
+        ):
+            self._timed_pending_start_ms = requested_start
+            if self.player.source() != desired_source:
+                self.player.setSource(desired_source)
+        else:
+            self._timed_pending_start_ms = None
+            self.player.setPosition(requested_start)
+            self.player.play()
         self.stop_button.setEnabled(True)
         self._update_ab_controls()
 
@@ -3078,6 +3300,20 @@ class MainWindow(QMainWindow):
             != self._replay_source_span
         ):
             self._show_synchronized_timed_line(timed_line)
+
+    def _timed_start_for_current_row(self) -> int:
+        if not self._study_mode or not self.timed_manifest:
+            return 0
+        current = self._current_study_row()
+        timed_line = next(
+            (
+                item
+                for item in self.timed_manifest.lines
+                if current is not None and _timed_matches_row(item, current)
+            ),
+            None,
+        )
+        return timed_line.start_ms if timed_line else 0
 
     def _show_synchronized_timed_line(self, timed_line: TimedLine) -> None:
         row = TranslationRow(
@@ -3117,6 +3353,7 @@ class MainWindow(QMainWindow):
         self._timed_playback_active = False
         self._timed_playback_scope = None
         self._timed_stop_ms = None
+        self._timed_pending_start_ms = None
         self._replay_highlight_line = None
         self._render_source_highlights()
         self._ab_repeat_ready = completed_scope == "ab"
@@ -3305,6 +3542,12 @@ class MainWindow(QMainWindow):
             self._t("operation_failed", message=message, log=LOG_PATH),
         )
 
+    def _show_offline_marker_error(self) -> None:
+        message = self._t("offline_marker_missing")
+        LOGGER.error("Offline package timestamp mismatch")
+        self.statusBar().showMessage(message)
+        QMessageBox.warning(self, self.windowTitle(), message)
+
     def _confirm_discard_changes(self) -> bool:
         if not self._dirty:
             return True
@@ -3365,12 +3608,17 @@ class MainWindow(QMainWindow):
             else None
         )
         self._audio_is_complete_document = self._timed_audio_ready()
+        self._offline_package_active = False
         if self.audio_path:
             self.player.setSource(QUrl.fromLocalFile(str(self.audio_path)))
         self._update_save_audio_button()
         self.replay_button.setEnabled(
             bool(self.source_edit.toPlainText().strip())
             or bool(self.audio_path and self.audio_path.exists())
+        )
+        self._set_study_mode(
+            bool(self.source_edit.toPlainText().strip())
+            and bool(self.translation_edit.toPlainText().strip())
         )
 
     @staticmethod

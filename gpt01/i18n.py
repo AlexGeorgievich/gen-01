@@ -24,6 +24,14 @@ _STRINGS: dict[str, tuple[str, str]] = {
         "Offline package opened: {name}",
         "Автономный пакет открыт: {name}",
     ),
+    "offline_marker_missing": (
+        "Offline playback is unavailable for the selected text fragment: its "
+        "timestamp is missing from the package JSON. VoiceGun did not connect "
+        "to the Internet. Rebuild the package to restore its integrity.",
+        "Автономное воспроизведение выбранного фрагмента невозможно: его "
+        "временная метка отсутствует в JSON пакета. VoiceGun не обращался к "
+        "Интернету. Сформируйте пакет повторно для восстановления целостности.",
+    ),
     "package_saved": (
         "Offline package saved: {name}",
         "Автономный пакет сохранён: {name}",
@@ -52,6 +60,11 @@ _STRINGS: dict[str, tuple[str, str]] = {
     "close": ("Close", "Закрыть"),
     "clear": ("Clear", "Очистить"),
     "source_text": ("Source text", "Исходный текст"),
+    "edit_source": ("Edit", "Редактировать"),
+    "edit_source_tip": (
+        "Unlock the source text for editing and enable translation",
+        "Открыть исходный текст для редактирования и включить перевод",
+    ),
     "translation": ("Translation", "Перевод"),
     "transcription": ("Transcription", "Транскрипция"),
     "source_placeholder": (
