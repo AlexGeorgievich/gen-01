@@ -9,10 +9,12 @@ from app import MainWindow  # noqa: E402
 from gpt01.models import Document, TranslationRow  # noqa: E402
 from gpt01.packages import load_package_history, save_package_document  # noqa: E402
 from gpt01.preferences import AudioPreparationMode  # noqa: E402
+from gpt01.rows import build_sentence_translation_rows  # noqa: E402
 from gpt01.session import SessionRepository  # noqa: E402
 from gpt01.timed_audio import (  # noqa: E402
     TimedAudioManifest,
     save_manifest,
+    save_srt,
     timed_line_from_row,
 )
 from gpt01.tts import TtsSettings  # noqa: E402
@@ -132,5 +134,66 @@ def test_open_offline_package_restores_document_audio_and_history(
     assert window._timed_audio_ready()
     assert load_package_history(repository.package_history_path)[0].name == "lesson_en"
 
+    window._dirty = False
+    window.close()
+
+
+def test_f10_waveform_uses_current_sentence_timestamps(qapp, tmp_path, monkeypatch):
+    repository = SessionRepository(tmp_path)
+    window = MainWindow(repository)
+    window.source_edit.setPlainText("one\ntwo")
+    window.translation_edit.setPlainText("un\ndeux")
+    window.transcription_edit.setPlainText("un\ndeux")
+    audio = tmp_path / "prepared.mp3"
+    manifest_path = tmp_path / "prepared.json"
+    srt_path = tmp_path / "prepared.srt"
+    audio.write_bytes(b"audio")
+    rows = build_sentence_translation_rows("one\ntwo", "un\ndeux", "un\ndeux")
+    manifest = TimedAudioManifest.create(
+        "English",
+        window.selected_voice(),
+        TtsSettings(),
+        [
+            timed_line_from_row(rows[0], 0, 700),
+            timed_line_from_row(rows[1], 700, 900),
+        ],
+    )
+    save_manifest(manifest_path, manifest)
+    save_srt(srt_path, manifest)
+    window.audio_path = audio
+    window.audio_manifest_path = manifest_path
+    window.audio_srt_path = srt_path
+    window.timed_manifest = manifest
+    cursor = window.source_edit.textCursor()
+    cursor.setPosition(rows[1].source_start)
+    window.source_edit.setTextCursor(cursor)
+    captured = {}
+
+    class FakeDialog:
+        def __init__(
+            self, _audio, start, end, source, translation, *_args, **_kwargs
+        ):
+            captured.update(
+                start=start, end=end, source=source, translation=translation
+            )
+
+        def exec(self):
+            return 0
+
+        def set_absolute_playhead(self, _position):
+            pass
+
+    monkeypatch.setattr("app.WaveformDialog", FakeDialog)
+    monkeypatch.setattr(window, "stop_audio", lambda: None)
+
+    window.open_current_waveform()
+
+    assert captured == {
+        "start": 700,
+        "end": 1600,
+        "source": "two",
+        "translation": "deux",
+    }
+    assert window.tasks.active_count == 0
     window._dirty = False
     window.close()

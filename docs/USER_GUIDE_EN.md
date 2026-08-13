@@ -73,6 +73,18 @@ and progress change in sync with every spoken sentence. In complete package mode
 playback seeks by timestamps; in fast mode each card is synthesized once and
 kept in a separate temporary cache.
 
+## Current sentence waveform
+
+Press `F10` to open a local waveform for the current sentence. This feature
+requires a prepared or opened MP3 package with timestamps and does not access
+the Internet. Source and translation are shown above the diagram. A regular
+click sets the start point; until an end point is set, `Space` plays from that
+point to the end of the sentence. `Shift+click` sets the end point, then `Space`
+plays the highlighted fragment. Drag inside the selection to move it while
+preserving its duration. `Ctrl++` zooms in and `Ctrl+-` zooms out. **Reset
+selection** removes both points, so `Space` plays the entire sentence. `Esc`
+closes the dialog and stops playback. The white line shows playback position.
+
 ## Translation
 
 1. Select the target language in **Language**.
@@ -206,6 +218,7 @@ write permission has been granted.
 - `Space` — replay a completed A–B range in the main window; inside Cards it
   repeats the current sentence or starts one A–B card cycle;
 - `F1` — open this guide.
+- `F10` — open the waveform for the current sentence.
 
 ## Author
 

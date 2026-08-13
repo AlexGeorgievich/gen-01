@@ -44,6 +44,24 @@ _STRINGS: dict[str, tuple[str, str]] = {
     "status_online": ("Internet: required", "Интернет: требуется"),
     "status_connecting": ("Internet: connecting…", "Интернет: обращение…"),
     "status_unavailable": ("Internet: unavailable", "Интернет: недоступен"),
+    "waveform_title": (
+        "Current sentence waveform — VoiceGun",
+        "Амплитуда текущего предложения — VoiceGun",
+    ),
+    "waveform_play": ("Play selection", "Воспроизвести фрагмент"),
+    "waveform_reset": ("Reset selection", "Сбросить выделение"),
+    "waveform_hint": (
+        "Click — set start; Shift+click — set end; drag selection — move it; "
+        "Ctrl++ / Ctrl+- — zoom; Space — play; Esc — close.",
+        "Щелчок — начало; Shift+щелчок — конец; перетаскивание — перемещение; "
+        "Ctrl++ / Ctrl+- — масштаб; Space — воспроизведение; Esc — закрыть.",
+    ),
+    "waveform_package_required": (
+        "F10 waveform view requires a prepared or opened MP3 package with "
+        "timestamps for the current sentence.",
+        "Для просмотра амплитуды по F10 нужен сформированный или открытый "
+        "MP3-пакет с временными метками текущего предложения.",
+    ),
     "history_empty": ("Package history is empty.", "История пакетов пуста."),
     "history_open": ("Open", "Открыть"),
     "history_remove": ("Remove from history", "Удалить из истории"),

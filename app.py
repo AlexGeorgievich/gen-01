@@ -108,6 +108,7 @@ from gpt01.version import (
     APP_ORGANIZATION,
     __version__,
 )
+from gpt01.waveform import WaveformDialog
 
 APP_TITLE = APP_DISPLAY_NAME
 VOICE_LOAD_TIMEOUT_SECONDS = 15
@@ -191,6 +192,7 @@ class MainWindow(QMainWindow):
         self._switching_language = False
         self.panels_swapped = False
         self._active_cards_dialog: FlashcardsDialog | None = None
+        self._active_waveform_dialog: WaveformDialog | None = None
         self.repository = repository or SessionRepository.for_application(APPLICATION_ROOT)
         self.preferences = self.repository.load_preferences()
         self.language_controller = LanguageController(
@@ -729,8 +731,10 @@ class MainWindow(QMainWindow):
         self.line_shortcut = QShortcut(QKeySequence("Ctrl+Space"), self)
         self.line_shortcut.activated.connect(self.speak_line_at_cursor)
         self.ab_repeat_shortcut = QShortcut(QKeySequence("Space"), self)
+        self.waveform_shortcut = QShortcut(QKeySequence("F10"), self)
         self.ab_repeat_shortcut.setEnabled(False)
         self.ab_repeat_shortcut.activated.connect(self.repeat_ab_range)
+        self.waveform_shortcut.activated.connect(self.open_current_waveform)
         self.open_shortcut = QShortcut(QKeySequence("Ctrl+O"), self)
         self.open_shortcut.activated.connect(self.open_file)
         self.help_shortcut = QShortcut(QKeySequence("F1"), self)
@@ -2038,6 +2042,57 @@ class MainWindow(QMainWindow):
             self.stop_audio()
         elif self.sequence.active and self._sequence_scope in {"cards", "cards_range"}:
             self._stop_sequence()
+
+    @Slot()
+    def open_current_waveform(self) -> None:
+        if not self._timed_audio_ready() or not self.audio_path or not self.timed_manifest:
+            QMessageBox.information(
+                self, self.windowTitle(), self._t("waveform_package_required")
+            )
+            return
+        row = self._current_study_row()
+        timed_line = next(
+            (
+                item
+                for item in self.timed_manifest.lines
+                if row is not None and _timed_matches_row(item, row)
+            ),
+            None,
+        )
+        if row is None or timed_line is None:
+            QMessageBox.information(
+                self, self.windowTitle(), self._t("waveform_package_required")
+            )
+            return
+        self.stop_audio()
+
+        def play_range(start_ms: int, end_ms: int) -> None:
+            self._start_timed_playback(start_ms, end_ms, "waveform")
+
+        def stop_waveform() -> None:
+            if self._timed_playback_scope == "waveform":
+                self.stop_audio()
+
+        dialog = WaveformDialog(
+            self.audio_path,
+            timed_line.start_ms,
+            timed_line.end_ms,
+            row.source,
+            row.translation,
+            play_range,
+            stop_waveform,
+            title=self._t("waveform_title"),
+            play_text=self._t("waveform_play"),
+            reset_text=self._t("waveform_reset"),
+            close_text=self._t("close"),
+            hint_text=self._t("waveform_hint"),
+            parent=self,
+        )
+        self._active_waveform_dialog = dialog
+        try:
+            dialog.exec()
+        finally:
+            self._active_waveform_dialog = None
 
     @Slot()
     def open_cards(self) -> None:
@@ -3360,6 +3415,8 @@ class MainWindow(QMainWindow):
     def _timed_position_changed(self, position_ms: int) -> None:
         if not self._timed_playback_active or not self.timed_manifest:
             return
+        if self._active_waveform_dialog:
+            self._active_waveform_dialog.set_absolute_playhead(position_ms)
         if self._timed_stop_ms is not None and position_ms >= self._timed_stop_ms:
             self._finish_timed_playback()
             return
