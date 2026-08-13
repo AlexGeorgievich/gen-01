@@ -200,6 +200,7 @@ class MainWindow(QMainWindow):
             self.repository.french_lexicon_path(),
         )
         self.current_source_path: Path | None = None
+        self._active_package_name: str | None = None
         self.subtitle_cues: tuple[SubtitleCue, ...] = ()
         self.audio_path: Path | None = None
         self.audio_manifest_path: Path | None = None
@@ -211,6 +212,8 @@ class MainWindow(QMainWindow):
         self._timed_pending_start_ms: int | None = None
         self._audio_is_complete_document = False
         self._offline_package_active = False
+        self._network_unavailable = False
+        self._busy_indicator_active = False
         self._study_mode = False
         self.player = QMediaPlayer(self)
         self.audio_output = QAudioOutput(self)
@@ -459,6 +462,8 @@ class MainWindow(QMainWindow):
         self._set_translation_window_visible(not self.translation_box.isHidden())
         self._set_transcription_window_visible(not self.transcription_box.isHidden())
         self._set_source_window_visible(not self.source_box.isHidden())
+        self._update_voice_tooltip()
+        self._update_document_status()
 
     @Slot()
     def _on_language_changed(self) -> None:
@@ -583,11 +588,12 @@ class MainWindow(QMainWindow):
         voice_box_layout.addWidget(self.language_label)
         voice_box_layout.addWidget(self.language_combo)
         voice_box_layout.addWidget(self.voice_label)
-        voice_box_layout.addWidget(self.voice_combo, 1)
+        voice_box_layout.addWidget(self.voice_combo)
         voice_box_layout.addStretch(1)
         voice_box_layout.addWidget(self.voice_status)
         voice_box_layout.addWidget(self.reload_voices_button)
         self.language_combo.setMinimumWidth(105)
+        self.voice_combo.setFixedWidth(380)
         self.voice_status.setMaximumWidth(245)
 
         central = QWidget()
@@ -648,13 +654,22 @@ class MainWindow(QMainWindow):
         )
 
         status = QStatusBar()
+        self.document_status_label = QLabel()
+        self.document_status_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.document_status_label.setMinimumWidth(260)
+        self.connection_status_label = QLabel()
+        self.connection_status_label.setAlignment(Qt.AlignmentFlag.AlignRight)
+        self.connection_status_label.setMinimumWidth(150)
         self.progress = QProgressBar()
         self.progress.setRange(0, 0)
         self.progress.setMaximumWidth(150)
         self.progress.hide()
+        status.addPermanentWidget(self.document_status_label, 1)
+        status.addPermanentWidget(self.connection_status_label)
         status.addPermanentWidget(self.progress)
         self.setStatusBar(status)
         self.statusBar().showMessage(self._t("ready"))
+        self._update_document_status()
 
     def _apply_panel_shadows(self) -> None:
         self._panel_shadows: list[QGraphicsDropShadowEffect] = []
@@ -700,6 +715,7 @@ class MainWindow(QMainWindow):
         self.transcription_clear_button.clicked.connect(self.clear_transcription_window)
         self.language_combo.currentIndexChanged.connect(self._on_language_changed)
         self.voice_combo.currentIndexChanged.connect(self._on_voice_changed)
+        self.voice_combo.currentTextChanged.connect(self._update_voice_tooltip)
         self.translation_edit.textChanged.connect(self._on_translation_changed)
         self.source_edit.textChanged.connect(self._on_source_text_changed)
         self.transcription_edit.textChanged.connect(self._on_text_changed)
@@ -927,6 +943,9 @@ class MainWindow(QMainWindow):
         self.statusBar().showMessage(message)
 
     def _set_busy(self, busy: bool, message: str, *, determinate: bool = False) -> None:
+        self._busy_indicator_active = busy
+        if busy:
+            self._network_unavailable = False
         self.progress.setVisible(busy)
         if busy and determinate:
             self.progress.setRange(0, 1)
@@ -956,6 +975,7 @@ class MainWindow(QMainWindow):
         self._update_save_audio_button(busy=busy)
         self._update_ab_controls()
         self.statusBar().showMessage(message)
+        self._update_document_status()
 
     @Slot()
     def open_file(self) -> None:
@@ -981,6 +1001,8 @@ class MainWindow(QMainWindow):
             self._loading_document = False
             self._dirty = False
             self.current_source_path = Path(filename)
+            self._active_package_name = None
+            self._update_document_status()
             self._remember_directory("last_open_directory", self.current_source_path.parent)
             self.statusBar().showMessage(self._t("opened", path=filename))
             self._set_study_mode(False)
@@ -1057,6 +1079,7 @@ class MainWindow(QMainWindow):
             self.transcription_edit.setPlainText(package.document.transcription)
             self._loading_document = False
             self.current_source_path = package.text_path
+            self._active_package_name = package.stem
             self.subtitle_cues = ()
             self.tts_settings = TtsSettings(
                 rate=package.manifest.rate,
@@ -1072,6 +1095,7 @@ class MainWindow(QMainWindow):
             self.timed_manifest = package.manifest
             self._audio_is_complete_document = True
             self._offline_package_active = True
+            self._update_document_status()
             self.player.setSource(QUrl.fromLocalFile(str(package.audio_path)))
             self._reset_range_markers()
             self._dirty = False
@@ -1390,6 +1414,8 @@ class MainWindow(QMainWindow):
         else:
             short_message = self._t("timeout")
         self.voice_status.setText(self._t("voice_refresh_failed", reason=short_message))
+        self._network_unavailable = True
+        self._update_document_status()
         self.statusBar().showMessage(self._t("tts_unavailable"))
 
     def _populate_voices(self, voices: list[dict[str, Any]]) -> None:
@@ -1409,6 +1435,35 @@ class MainWindow(QMainWindow):
 
     def selected_voice(self) -> str | None:
         return self.voice_combo.currentData()
+
+    @Slot(str)
+    def _update_voice_tooltip(self, text: str = "") -> None:
+        self.voice_combo.setToolTip(text or self.voice_combo.currentText())
+
+    def _update_document_status(self) -> None:
+        if not hasattr(self, "document_status_label"):
+            return
+        if self._active_package_name:
+            text = self._t("status_package", name=self._active_package_name)
+        elif self.current_source_path:
+            text = self._t("status_file", name=self.current_source_path.name)
+        else:
+            text = self._t("status_new_document")
+        if self._dirty:
+            text += f" • {self._t('status_modified')}"
+        self.document_status_label.setText(text)
+        self.document_status_label.setToolTip(text)
+        if self._offline_package_active:
+            connection_key = "status_offline"
+        elif self._busy_indicator_active:
+            connection_key = "status_connecting"
+        elif self._network_unavailable:
+            connection_key = "status_unavailable"
+        else:
+            connection_key = "status_online"
+        connection = self._t(connection_key)
+        self.connection_status_label.setText(connection)
+        self.connection_status_label.setToolTip(connection)
 
     @Slot()
     def speak_text(self) -> None:
@@ -1596,6 +1651,7 @@ class MainWindow(QMainWindow):
         if not self._loading_document:
             self._dirty = True
         self._reset_audio_state()
+        self._update_document_status()
 
     def _set_study_mode(self, enabled: bool) -> None:
         self._study_mode = enabled
@@ -1613,6 +1669,8 @@ class MainWindow(QMainWindow):
         self._reset_range_markers()
         self._reset_audio_state()
         self._set_study_mode(False)
+        self._active_package_name = None
+        self._update_document_status()
         self.source_edit.setFocus()
 
     @Slot()
@@ -3210,6 +3268,11 @@ class MainWindow(QMainWindow):
                     self.current_language.key,
                     target,
                 )
+                self.current_source_path = target.with_suffix(".txt")
+                self._active_package_name = target.stem
+                self._offline_package_active = True
+                self._dirty = False
+                self._update_document_status()
             self._remember_directory("last_export_directory", target.parent)
             self.statusBar().showMessage(
                 self._t("package_saved", name=target.stem)
@@ -3536,6 +3599,22 @@ class MainWindow(QMainWindow):
     @Slot(str)
     def _show_error(self, message: str) -> None:
         LOGGER.error("User-visible error: %s", message)
+        lowered = message.casefold()
+        if any(
+            marker in lowered
+            for marker in (
+                "connection timeout",
+                "connection error",
+                "request timed out",
+                "сервис перевода недоступен",
+                "сервис перевода не ответил",
+                "сервис синтеза речи недоступен",
+                "сервис синтеза речи не ответил",
+                "недоступности сети",
+            )
+        ):
+            self._network_unavailable = True
+            self._update_document_status()
         QMessageBox.critical(
             self,
             self.windowTitle(),
@@ -3620,6 +3699,8 @@ class MainWindow(QMainWindow):
             bool(self.source_edit.toPlainText().strip())
             and bool(self.translation_edit.toPlainText().strip())
         )
+        self._active_package_name = None
+        self._update_document_status()
 
     @staticmethod
     def _restore_subtitle_cues(path: Path | None) -> tuple[SubtitleCue, ...]:

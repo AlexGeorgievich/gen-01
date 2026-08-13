@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -148,6 +148,42 @@ def load_offline_package(audio_path: Path, language: str) -> OfflinePackage:
             "Текст документа не соответствует временным меткам пакета. "
             "Сформируйте пакет повторно."
         )
+    normalized_lines = tuple(
+        replace(
+            timed,
+            source_start=(
+                timed.source_start
+                if timed.source_start is not None
+                else row.source_start
+            ),
+            source_end=(
+                timed.source_end if timed.source_end is not None else row.source_end
+            ),
+            translation_start=(
+                timed.translation_start
+                if timed.translation_start is not None
+                else row.translation_start
+            ),
+            translation_end=(
+                timed.translation_end
+                if timed.translation_end is not None
+                else row.translation_end
+            ),
+            transcription_start=(
+                timed.transcription_start
+                if timed.transcription_start is not None
+                else row.transcription_start
+            ),
+            transcription_end=(
+                timed.transcription_end
+                if timed.transcription_end is not None
+                else row.transcription_end
+            ),
+        )
+        for timed, row in zip(manifest.lines, expected_rows, strict=True)
+    )
+    if normalized_lines != manifest.lines:
+        manifest = replace(manifest, lines=normalized_lines)
     return OfflinePackage(language, audio_path.stem, base_path, document, manifest)
 
 

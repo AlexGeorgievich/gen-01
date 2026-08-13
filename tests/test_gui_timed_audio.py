@@ -126,7 +126,9 @@ def test_open_offline_package_restores_document_audio_and_history(
     assert window.translation_edit.toPlainText() == "one\ntwo"
     assert window.transcription_edit.toPlainText() == "/wʌn/\n/tuː/"
     assert window.audio_path == audio
-    assert window.timed_manifest == manifest
+    assert window.timed_manifest is not None
+    assert window.timed_manifest.total_duration_ms == manifest.total_duration_ms
+    assert [line.source_start for line in window.timed_manifest.lines] == [0, 4]
     assert window._timed_audio_ready()
     assert load_package_history(repository.package_history_path)[0].name == "lesson_en"
 

@@ -80,6 +80,42 @@ def test_study_mode_locks_source_and_uses_arrows_space_and_current_start(
     window.close()
 
 
+def test_compact_voice_field_and_document_status(qapp, tmp_path):
+    window = MainWindow(SessionRepository(tmp_path))
+
+    assert window.voice_combo.width() == 380
+    assert window.voice_combo.toolTip() == window.voice_combo.currentText()
+    assert window.document_status_label.text() == window._t("status_new_document")
+    assert window.connection_status_label.text() == window._t("status_online")
+
+    window._set_busy(True, "working", determinate=True)
+    assert not window.progress.isHidden()
+    assert window.connection_status_label.text() == window._t("status_connecting")
+    window._set_busy(False, "ready")
+    assert window.progress.isHidden()
+    assert window.connection_status_label.text() == window._t("status_online")
+
+    window._network_unavailable = True
+    window._update_document_status()
+    assert window.connection_status_label.text() == window._t("status_unavailable")
+
+    window.current_source_path = tmp_path / "lesson.txt"
+    window._dirty = True
+    window._update_document_status()
+    assert "lesson.txt" in window.document_status_label.text()
+    assert window._t("status_modified") in window.document_status_label.text()
+
+    window._active_package_name = "lesson_ru_en"
+    window._offline_package_active = True
+    window._dirty = False
+    window._update_document_status()
+    assert window.document_status_label.text() == window._t(
+        "status_package", name="lesson_ru_en"
+    )
+    assert window.connection_status_label.text() == window._t("status_offline")
+    window.close()
+
+
 def install_timed_package(window, tmp_path, lines=None):
     audio = tmp_path / "prepared.mp3"
     manifest_path = tmp_path / "prepared.json"
