@@ -114,6 +114,10 @@ def test_main_editor_panels_have_distinct_colors_and_soft_shadows(tmp_path) -> N
     assert "#eef4ff" in window.centralWidget().styleSheet()
     assert "#edf9f6" in window.centralWidget().styleSheet()
     assert "#f5f0ff" in window.centralWidget().styleSheet()
+    combo_style = window.centralWidget().styleSheet()
+    assert "QComboBox QAbstractItemView" in combo_style
+    assert "selection-background-color: #397dcc" in combo_style
+    assert "selection-color: #ffffff" in combo_style
     for panel in (
         window.source_box,
         window.translation_box,
@@ -127,13 +131,11 @@ def test_main_editor_panels_have_distinct_colors_and_soft_shadows(tmp_path) -> N
     window.close()
 
 
-def test_voice_selector_uses_half_of_the_available_flexible_width(tmp_path) -> None:
+def test_voice_selector_uses_compact_fixed_width(tmp_path) -> None:
     _app()
     window = MainWindow(SessionRepository(tmp_path))
-    layout = window.voice_box.layout()
-
-    assert layout.stretch(3) == 1
-    assert layout.stretch(4) == 1
+    assert window.voice_combo.minimumWidth() == 380
+    assert window.voice_combo.maximumWidth() == 380
     window._dirty = False
     window.close()
 

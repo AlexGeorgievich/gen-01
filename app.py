@@ -629,6 +629,13 @@ class MainWindow(QMainWindow):
             "border-color: #cad3dc; }"
             "QComboBox, QSpinBox { background: white; color: #172433; "
             "border: 1px solid #aebfd1; border-radius: 5px; padding: 4px 7px; }"
+            "QComboBox QAbstractItemView { background: #ffffff; color: #172433; "
+            "selection-background-color: #397dcc; selection-color: #ffffff; "
+            "border: 1px solid #8fa8c1; outline: 0; }"
+            "QComboBox QAbstractItemView::item { color: #172433; "
+            "background: #ffffff; min-height: 24px; padding: 3px 7px; }"
+            "QComboBox QAbstractItemView::item:selected { color: #ffffff; "
+            "background: #397dcc; }"
         )
         self.source_title.setStyleSheet("color: #245ea8; font-weight: 700;")
         self.translation_title.setStyleSheet("color: #087a6d; font-weight: 700;")
