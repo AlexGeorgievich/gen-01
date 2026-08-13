@@ -118,7 +118,7 @@ APPLICATION_ROOT = (
     else Path(__file__).resolve().parent
 )
 BUNDLE_ROOT = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent))
-APP_ICON_PATH = BUNDLE_ROOT / "assets" / "gpt01.svg"
+APP_ICON_PATH = BUNDLE_ROOT / "assets" / "voicegun-icon-v2.png"
 HELP_PATHS = {
     "en": BUNDLE_ROOT / "docs" / "USER_GUIDE_EN.md",
     "ru": BUNDLE_ROOT / "docs" / "USER_GUIDE_RU.md",

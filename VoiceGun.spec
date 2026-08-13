@@ -6,7 +6,7 @@ from PyInstaller.utils.hooks import collect_data_files, copy_metadata
 
 
 datas = [
-    ("assets/gpt01.svg", "assets"),
+    ("assets/voicegun-icon-v2.png", "assets"),
     ("docs/USER_GUIDE_EN.md", "docs"),
     ("docs/USER_GUIDE_RU.md", "docs"),
 ]
@@ -68,7 +68,7 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
-    icon="assets/gpt01.ico",
+    icon="assets/voicegun-icon-v2.ico",
     version="windows_version_info.txt",
 )
 coll = COLLECT(
