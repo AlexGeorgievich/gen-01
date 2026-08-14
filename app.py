@@ -2050,15 +2050,22 @@ class MainWindow(QMainWindow):
                 self, self.windowTitle(), self._t("waveform_package_required")
             )
             return
+        playback_rows = self._card_playback_rows()
         row = self._current_study_row()
-        timed_line = next(
-            (
-                item
-                for item in self.timed_manifest.lines
-                if row is not None and _timed_matches_row(item, row)
-            ),
-            None,
-        )
+        if row not in playback_rows and playback_rows:
+            row = playback_rows[0]
+        timed_lines = [
+            next(
+                (
+                    item
+                    for item in self.timed_manifest.lines
+                    if _timed_matches_row(item, candidate)
+                ),
+                None,
+            )
+            for candidate in playback_rows
+        ]
+        timed_line = timed_lines[playback_rows.index(row)] if row in playback_rows else None
         if row is None or timed_line is None:
             QMessageBox.information(
                 self, self.windowTitle(), self._t("waveform_package_required")
@@ -2073,6 +2080,36 @@ class MainWindow(QMainWindow):
             if self._timed_playback_scope == "waveform":
                 self.stop_audio()
 
+        def set_waveform_speed(speed: float) -> None:
+            self.player.setPlaybackRate(speed)
+
+        current_position = playback_rows.index(row)
+
+        def navigate_waveform(offset: int):
+            nonlocal current_position
+            target = current_position + offset
+            if self._has_ab_range():
+                target %= len(playback_rows)
+            elif target < 0 or target >= len(playback_rows):
+                return None
+            target_timed = timed_lines[target]
+            if target_timed is None:
+                return None
+            current_position = target
+            target_row = playback_rows[target]
+            self._select_study_row(target_row)
+            self._start_timed_playback(
+                target_timed.start_ms, target_timed.end_ms, "waveform"
+            )
+            return (
+                target_timed.start_ms,
+                target_timed.end_ms,
+                target_row.source,
+                target_row.translation,
+                target + 1,
+                len(playback_rows),
+            )
+
         dialog = WaveformDialog(
             self.audio_path,
             timed_line.start_ms,
@@ -2081,11 +2118,17 @@ class MainWindow(QMainWindow):
             row.translation,
             play_range,
             stop_waveform,
+            set_waveform_speed,
             title=self._t("waveform_title"),
             play_text=self._t("waveform_play"),
             reset_text=self._t("waveform_reset"),
             close_text=self._t("close"),
             hint_text=self._t("waveform_hint"),
+            speed_text=self._t("waveform_speed"),
+            navigate=navigate_waveform,
+            current_position=current_position + 1,
+            total_positions=len(playback_rows),
+            cyclic_navigation=self._has_ab_range(),
             parent=self,
         )
         self._active_waveform_dialog = dialog

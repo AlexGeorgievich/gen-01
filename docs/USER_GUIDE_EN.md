@@ -83,7 +83,9 @@ point to the end of the sentence. `Shift+click` sets the end point, then `Space`
 plays the highlighted fragment. Drag inside the selection to move it while
 preserving its duration. `Ctrl++` zooms in and `Ctrl+-` zooms out. **Reset
 selection** removes both points, so `Space` plays the entire sentence. `Esc`
-closes the dialog and stops playback. The white line shows playback position.
+closes the dialog and stops playback. **Speed** offers `0.50×` through `2.00×`
+in `0.25×` steps; a change applies immediately, and closing the dialog restores
+`1.00×`. The white line shows playback position.
 
 ## Translation
 

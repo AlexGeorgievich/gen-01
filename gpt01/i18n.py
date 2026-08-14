@@ -50,6 +50,7 @@ _STRINGS: dict[str, tuple[str, str]] = {
     ),
     "waveform_play": ("Play selection", "Воспроизвести фрагмент"),
     "waveform_reset": ("Reset selection", "Сбросить выделение"),
+    "waveform_speed": ("Speed:", "Скорость:"),
     "waveform_hint": (
         "Click — set start; Shift+click — set end; drag selection — move it; "
         "Ctrl++ / Ctrl+- — zoom; Space — play; Esc — close.",
